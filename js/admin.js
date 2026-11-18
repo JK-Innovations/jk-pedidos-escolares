@@ -3,8 +3,12 @@
   const { T, esc, money, loc, fd, fdt, szl, dsc } = JK;
   const root = document.getElementById('app');
   const A = { user: null, ok: false, msg: '', D: null, loading: false, view: 'summary', fSchool: 'all', fPeriod: 'all', orderSel: null, delSel: null, cfg: null, newFor: null, schoolForm: null,
-    toast: '', rType: 'production', rGroup: 'all', rLang: JK.lang, rPaper: 'letter', f: {}, pq: {}, eq: {}, dq: {}, pf: {}, zoom: '' };
+    toast: '', rType: 'production', rGroup: 'all', rLang: JK.lang, rPaper: 'letter', rStatus: 'all', rByGroup: false, gate: '', recovery: false, showPass: false, sending: false, authReady: false, f: {}, pq: {}, eq: {}, dq: {}, pf: {}, zoom: '' };
   const sb = () => JK.sb();
+  const recoveryFromHash = () => { const raw = (location.hash || '').replace(/^#/, ''); return !!raw && new URLSearchParams(raw).get('type') === 'recovery'; };
+  const markRecovery = () => { A.recovery = true; try { sessionStorage.setItem('jk_pw_recovery', '1'); } catch (e) {} };
+  const clearRecovery = () => { A.recovery = false; try { sessionStorage.removeItem('jk_pw_recovery'); } catch (e) {} };
+  const adminRedirect = () => { const u = new URL(location.href); u.hash = ''; return u.href; };
   const todayLA = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
   const eff = p => { const d = todayLA(); return p.status === 'closed' || d > p.close_date ? 'closed' : (p.status === 'open' && d >= p.open_date ? 'open' : 'pending'); };
   const stl = p => T({ pending: 'stPending', open: 'stOpen', closed: 'stClosed' }[eff(p)]);
@@ -183,15 +187,15 @@
   // ---- reportes imprimibles ----
   function sheets() {
     const rl = A.rLang, R = k => T(k, rl), ps = fPeriods(), out = [], now = new Date(), ymd = now.toISOString().slice(0, 10).replace(/-/g, '');
-    const code = { preorders: 'SOL', production: 'PRD', prep: rl === 'es' ? 'PRE' : 'PREP', individual: 'IND', delivery: rl === 'es' ? 'ENT' : 'DEL' }[A.rType];
+    const code = { preorders: 'SOL', production: 'PRD', prodsum: 'SUM', prep: rl === 'es' ? 'PRE' : 'PREP', individual: 'IND', delivery: rl === 'es' ? 'ENT' : 'DEL' }[A.rType] || 'RPT';
     const rowT = (l, extra = '') => `<tr>${extra}<td>${esc(dsc(l, rl))}<div>${esc(l.design || '')}</div></td><td>${esc(loc(l.color_name, rl))}</td><td>${esc(szl(l, rl))}</td>`;
     const rg = ps.length === 1 && D().groups.some(g => g.id === A.rGroup && g.period_id === ps[0].id) ? A.rGroup : 'all';
     ps.forEach(p => {
       const s = D().sch[p.school_id], gsel = rg === 'all' ? null : D().grp[rg];
-      const head = (title, g) => `<div class="sheet"><div class="row between" style="align-items:flex-start;border-bottom:2px solid var(--deep-blue);padding-bottom:12px;margin-bottom:14px"><div><h1>${title}</h1><div style="font-size:15px;font-weight:700;margin-top:4px">${esc(s.name)} · ${rng(p, rl)}</div><div style="font-size:13px">${g ? esc(gl(g, rl)) : ''}</div></div><div class="row" style="gap:14px">${s.logo_path ? `<img src="${esc(s.logo_path)}" alt="" style="height:64px;width:auto"/>` : ''}<img src="assets/logo-color.svg" alt="" style="height:52px;width:auto"/></div></div>
+      const head = (title, g) => `<div class="${A.rType === 'prodsum' ? 'sheet prodsum' : 'sheet'}"><div class="row between" style="align-items:flex-start;border-bottom:2px solid var(--deep-blue);padding-bottom:12px;margin-bottom:14px"><div><h1>${title}</h1><div style="font-size:15px;font-weight:700;margin-top:4px">${esc(s.name)} · ${rng(p, rl)}</div><div style="font-size:13px">${g ? esc(gl(g, rl)) : ''}</div></div><div class="row" style="gap:14px">${s.logo_path ? `<img src="${esc(s.logo_path)}" alt="" style="height:64px;width:auto"/>` : ''}<img src="assets/logo-color.svg" alt="" style="height:52px;width:auto"/></div></div>
         <div style="font-size:12px;color:#555;margin-bottom:14px">${R('filters')}: ${R('school')}: ${esc(s.name)} · ${R('orderPeriod')}: ${rng(p, rl)} · ${R('teacher')}: ${gsel ? esc(gsel.teacher) : R('fAll')} · ${R('generated')}: ${now.toLocaleString(rl === 'es' ? 'es-US' : 'en-US')} · ID: <b>RPT-${code}-${p.id.slice(0, 4).toUpperCase()}${g ? '-' + g.id.slice(0, 4).toUpperCase() : ''}-${ymd}</b></div>`;
       const gs = D().groups.filter(g => g.period_id === p.id && (rg === 'all' || g.id === rg));
-      if (A.rType === 'preorders') { const ls = D().lines.filter(l => l.period_id === p.id && (rg === 'all' || l.group_id === rg) && D().ord[l.order_id].status !== 'cancelled'); out.push(head(R('r_preorders'), gsel) + `<table><thead><tr><th># / ${R('status')}</th><th>${R('registeredBy')}</th><th>${R('teacher')}</th><th>${R('product')}</th><th>${R('color')}</th><th>${R('size')}</th><th>${R('qty')}</th><th>${R('pers')}</th></tr></thead><tbody>${ls.map(l => { const o=D().ord[l.order_id]; return rowT(l, `<td>${esc(o.number)}<div>${R(o.status === 'preorder' ? 'stPreorder' : 'stActive')}</div></td><td>${esc(o.registrant_name)}</td><td>${esc(D().grp[l.group_id].teacher)}</td>`) + `<td>${l.qty}</td><td>${esc(l.personalization)}</td></tr>`; }).join('')}</tbody></table></div>`); } else if (A.rType === 'production') {
+      if (A.rType === 'prodsum') { out.push(prodSummarySheet(p, s, rg, gsel, rl, R, head)); } else if (A.rType === 'preorders') { const ls = D().lines.filter(l => l.period_id === p.id && (rg === 'all' || l.group_id === rg) && D().ord[l.order_id].status !== 'cancelled'); out.push(head(R('r_preorders'), gsel) + `<table><thead><tr><th># / ${R('status')}</th><th>${R('registeredBy')}</th><th>${R('teacher')}</th><th>${R('product')}</th><th>${R('color')}</th><th>${R('size')}</th><th>${R('qty')}</th><th>${R('pers')}</th></tr></thead><tbody>${ls.map(l => { const o=D().ord[l.order_id]; return rowT(l, `<td>${esc(o.number)}<div>${R(o.status === 'preorder' ? 'stPreorder' : 'stActive')}</div></td><td>${esc(o.registrant_name)}</td><td>${esc(D().grp[l.group_id].teacher)}</td>`) + `<td>${l.qty}</td><td>${esc(l.personalization)}</td></tr>`; }).join('')}</tbody></table></div>`); } else if (A.rType === 'production') {
         const rows = prodRows(p.id, rg).filter(r => r.ordered > 0), ds = {}; rows.forEach(r => (ds[r.design] = ds[r.design] || []).push(r));
         out.push(head(R('r_production'), null) + (rg !== 'all' ? `<p>${R('groupProgressNote')}</p>` : '') + Object.keys(ds).map(d => `<div style="margin-bottom:14px"><div style="font-weight:700;margin-bottom:4px">${R('design')}: ${esc(d)}</div><table><thead><tr><th>${R('product')}</th><th>${R('color')}</th><th>${R('size')}</th><th class="num">${R('ordered2')}</th><th class="num">${R('prepared')}</th><th class="num">${R('pendingShort')}</th></tr></thead><tbody>
           ${ds[d].map(r => rowT(r) + `<td class="num">${r.ordered}</td><td class="num">${rg === 'all' ? r.prepared : '—'}</td><td class="num">${rg === 'all' ? r.pending : '—'}</td></tr>`).join('')}<tr><td colspan="3"><b>${R('subtotal')}</b></td><td class="num"><b>${ds[d].reduce((a, r) => a + r.ordered, 0)}</b></td><td class="num"><b>${rg === 'all' ? ds[d].reduce((a, r) => a + r.prepared, 0) : '—'}</b></td><td class="num"><b>${rg === 'all' ? ds[d].reduce((a, r) => a + r.pending, 0) : '—'}</b></td></tr></tbody></table></div>`).join('') + `<div style="font-weight:800;font-size:16px">${R('total')}: ${rows.reduce((a, r) => a + r.ordered, 0)}</div></div>`);
@@ -209,12 +213,98 @@
     });
     return out.join('') || `<div class="muted">${T('noItems')}</div>`;
   }
+  function reportGroupId() {
+    const ps = fPeriods();
+    return ps.length === 1 && D().groups.some(g => g.id === A.rGroup && g.period_id === ps[0].id) ? A.rGroup : 'all';
+  }
+  function summaryLines(p, groupId) {
+    const rl = A.rLang;
+    return D().lines.filter(l => {
+      if (l.period_id !== p.id) return false;
+      const o = D().ord[l.order_id];
+      if (!o || !JKProd.statusOk(o.status, A.rStatus || 'all')) return false;
+      if (groupId && groupId !== 'all' && l.group_id !== groupId) return false;
+      return true;
+    }).map(l => {
+      const g = D().grp[l.group_id] || {}, o = D().ord[l.order_id];
+      return {
+        code: l.code || '', name: loc(l.product_name, rl), modelId: l.model_id || '', model: l.model_label ? loc(l.model_label, rl) : '',
+        colorId: l.color_id || '', color: loc(l.color_name, rl), design: l.design || '', groupId: l.group_id || '',
+        groupLabel: g.teacher ? gl(g, rl) : '', teacher: g.teacher || '', grade: g.grade || '', room: g.room || '',
+        age: l.age || '', size: l.size || '', qty: l.qty || 0, personalization: (l.personalization || '').trim(), orderNumber: o.number || ''
+      };
+    });
+  }
+  function prodStatusLabel(R) {
+    return A.rStatus === 'preorder' ? R('sumPreorder') : A.rStatus === 'active' ? R('sumActive') : R('sumAll');
+  }
+  function matrixTable(sum, R) {
+    const byGroup = !!A.rByGroup, youth = sum.columns.filter(JKProd.isYouth), adult = sum.columns.filter(c => !JKProd.isYouth(c));
+    const lead = 4 + (byGroup ? 1 : 0);
+    const groupHead = (cols, label) => cols.length ? `<th class="grp" colspan="${cols.length}">${label}</th>` : '';
+    const sizeHeads = sum.columns.map(c => `<th class="sz" scope="col">${esc(c)}</th>`).join('');
+    const cells = r => sum.columns.map(c => `<td class="sz">${r.qty[c] ? r.qty[c] : ''}</td>`).join('');
+    const body = sum.rows.map(r => `<tr><td><b>${esc(r.code ? r.code + ' · ' : '')}${esc(r.name)}</b></td><td>${esc(r.model) || '—'}</td><td>${esc(r.color) || '—'}</td><td>${esc(r.design) || '—'}</td>${byGroup ? `<td>${esc(r.groupLabel) || '—'}</td>` : ''}${cells(r)}<td class="num"><b>${r.total}</b></td></tr>`).join('');
+    const grand = `<tr class="grand"><td colspan="${lead}">${R('grandTotal')}</td>${sum.columns.map(c => `<td class="sz">${sum.grand.qty[c] || 0}</td>`).join('')}<td class="num">${sum.grand.total}</td></tr>`;
+    return `<div class="scroll"><table class="matrix"><thead><tr><th rowspan="2" scope="col">${R('product')}</th><th rowspan="2" scope="col">${R('model')}</th><th rowspan="2" scope="col">${R('color')}</th><th rowspan="2" scope="col">${R('design')}</th>${byGroup ? `<th rowspan="2" scope="col">${R('group')}</th>` : ''}${groupHead(youth, R('youthSizes'))}${groupHead(adult, R('adultSizes'))}<th rowspan="2" class="num" scope="col">${R('total')}</th></tr><tr>${sizeHeads}</tr></thead><tbody>${body}${grand}</tbody></table></div>`;
+  }
+  function persTable(sum, R) {
+    const title = `<h2>${R('persList')}</h2>`;
+    if (!sum.pers.length) return title + `<div>${R('noPers')}</div>`;
+    return title + `<div class="scroll"><table><thead><tr><th>${R('orderNo')}</th><th>${R('group')}</th><th>${R('product')}</th><th>${R('model')}</th><th>${R('color')}</th><th>${R('size')}</th><th class="num">${R('qty')}</th><th>${R('exactText')}</th></tr></thead><tbody>${sum.pers.map(l => `<tr><td><b>${esc(l.orderNumber)}</b></td><td>${esc(l.groupLabel)}</td><td>${esc((l.code ? l.code + ' · ' : '') + l.name)}</td><td>${esc(l.model) || '—'}</td><td>${esc(l.color)}</td><td>${esc(l.sizeLabel)}</td><td class="num">${l.qty}</td><td><b>“${esc(l.personalization)}”</b></td></tr>`).join('')}</tbody></table></div>`;
+  }
+  function prodSummarySheet(p, s, rg, gsel, rl, R, head) {
+    const sum = JKProd.summarize(summaryLines(p, rg), { byGroup: !!A.rByGroup });
+    const meta = `<div class="note">${R('prodStatus')}: <b>${esc(prodStatusLabel(R))}</b>${A.rByGroup ? ' · ' + esc(R('byGroup')) : ''}</div><p class="note">${R('prodSumNote')}</p>`;
+    const body = sum.rows.length ? matrixTable(sum, R) + `<p class="note">${R('sizeHint')}</p>` : `<div>${R('noItems')}</div>`;
+    return head(R('r_prodsum'), gsel) + meta + body + persTable(sum, R) + '</div>';
+  }
+  function prodCsv() {
+    const rl = A.rLang, R = k => T(k, rl), rg = reportGroupId(), now = new Date();
+    const lines = [];
+    const push = row => lines.push(row.map(JKProd.csvEscape).join(','));
+    fPeriods().forEach(p => {
+      const s = D().sch[p.school_id], gsel = rg === 'all' ? null : D().grp[rg];
+      const sum = JKProd.summarize(summaryLines(p, rg), { byGroup: !!A.rByGroup });
+      push([R('r_prodsum')]);
+      push([R('school'), s.name]);
+      push([R('orderPeriod'), rng(p, rl)]);
+      push([R('prodStatus'), prodStatusLabel(R)]);
+      push([R('teacher'), gsel ? gsel.teacher : R('fAll')]);
+      push([R('byGroup'), A.rByGroup ? 'yes' : 'no']);
+      push([R('generated'), now.toLocaleString(rl === 'es' ? 'es-US' : 'en-US')]);
+      push([]);
+      const head = [R('code'), R('product'), R('model'), R('color'), R('design')];
+      if (A.rByGroup) head.push(R('group'));
+      push(head.concat(sum.columns, [R('total')]));
+      sum.rows.forEach(r => {
+        const row = [r.code, r.name, r.model, r.color, r.design];
+        if (A.rByGroup) row.push(r.groupLabel);
+        sum.columns.forEach(c => row.push(r.qty[c] || 0));
+        row.push(r.total);
+        push(row);
+      });
+      const grand = [R('grandTotal'), '', '', '', ''];
+      if (A.rByGroup) grand.push('');
+      sum.columns.forEach(c => grand.push(sum.grand.qty[c] || 0));
+      grand.push(sum.grand.total);
+      push(grand);
+      push([]);
+      push([R('persList')]);
+      push([R('orderNo'), R('group'), R('code'), R('product'), R('model'), R('color'), R('size'), R('qty'), R('exactText')]);
+      sum.pers.forEach(l => push([l.orderNumber, l.groupLabel, l.code, l.name, l.model, l.color, l.sizeLabel, l.qty, l.personalization]));
+      push([]);
+    });
+    return lines.join('\r\n');
+  }
   function vReports() {
     const ps = fPeriods(), gopts = [{ v: 'all', l: T('fAll') }, ...(ps.length === 1 ? D().groups.filter(g => g.period_id === ps[0].id).map(g => ({ v: g.id, l: gl(g) })) : [])];
-    return `<div class="no-print card col"><div class="grid"><label>${T('reportType')}<select data-s="rType" data-re>${opts(['preorders', 'production', 'prep', 'individual', 'delivery'].map(k => ({ v: k, l: T('r_' + k) })), A.rType)}</select></label>
+    const extra = A.rType === 'prodsum' ? `<label>${T('prodStatus')}<select data-s="rStatus" data-re>${opts([{ v: 'all', l: T('sumAll') }, { v: 'preorder', l: T('sumPreorder') }, { v: 'active', l: T('sumActive') }], A.rStatus || 'all')}</select></label>
+      <label style="flex-direction:row;align-items:center;gap:10px;min-height:44px;grid-column:1 / -1"><input type="checkbox" data-s="rByGroup" data-re ${A.rByGroup ? 'checked' : ''}/> <span>${T('byGroup')}</span></label>` : '';
+    return `<div class="no-print card col"><div class="grid"><label>${T('reportType')}<select data-s="rType" data-re>${opts(['prodsum', 'preorders', 'production', 'prep', 'individual', 'delivery'].map(k => ({ v: k, l: T('r_' + k) })), A.rType)}</select></label>
       <label>${T('teacher')}<select data-s="rGroup" data-re>${opts(gopts, A.rGroup)}</select></label><label>${T('reportLang')}<select data-s="rLang" data-re>${opts([{ v: 'es', l: 'Español' }, { v: 'en', l: 'English' }], A.rLang)}</select></label>
-      <label>${T('paper')}<select data-s="rPaper" data-re>${opts([{ v: 'letter', l: T('letterOpt') }, { v: 'a4', l: 'A4' }], A.rPaper)}</select></label></div>
-      <div class="row"><button class="btn" data-act="print">${T('print')}</button><span class="muted">${T('printNote')}</span></div></div>${sheets()}`;
+      <label>${T('paper')}<select data-s="rPaper" data-re>${opts([{ v: 'letter', l: T('letterOpt') }, { v: 'a4', l: 'A4' }], A.rPaper)}</select></label>${extra}</div>
+      <div class="row"><button class="btn" data-act="print">${T('print')}</button>${A.rType === 'prodsum' ? `<button class="btn sec" data-act="csvProd">${T('downloadCsv')}</button>` : ''}<span class="muted">${A.rType === 'prodsum' ? T('prodSumPrint') : T('printNote')}</span></div></div>${sheets()}`;
   }
 
   // ---- armado ----
@@ -223,12 +313,40 @@
   function render() {
     document.documentElement.lang = JK.lang;
     const pg = document.getElementById('pgsize') || Object.assign(document.head.appendChild(document.createElement('style')), { id: 'pgsize' });
-    pg.textContent = '@page{size:' + (A.rPaper === 'a4' ? 'A4' : 'letter') + ';margin:14mm}';
+    pg.textContent = '@page{size:' + (A.rPaper === 'a4' ? 'A4' : 'letter') + (A.view === 'reports' && A.rType === 'prodsum' ? ' landscape' : '') + ';margin:12mm}';
     if (!JK.configured()) { root.innerHTML = `<div class="card" style="max-width:560px;margin:40px auto"><b class="err">${T('eConfig')}</b></div>`; return; }
+    const authShell = inner => `<div class="col" style="max-width:420px;margin:40px auto;padding:0 16px"><div class="row between"><img src="assets/logo-color.svg" alt="JKINnovations" style="height:60px;width:auto"/><div class="row" style="gap:6px">${langBtns()}</div></div>${inner}</div>`;
+    if (A.recovery) {
+      if (A.authReady && !A.user) {
+        root.innerHTML = authShell(`<div class="card auth-card col"><h2>${T('setPassword')}</h2><div class="err" role="alert">${T('ePassLink')}</div><button class="btn sec" data-act="cancelRecovery">${T('backLogin')}</button></div>`);
+        return;
+      }
+      const typ = A.showPass ? 'text' : 'password';
+      root.innerHTML = authShell(`<div class="card auth-card col"><h2>${T('setPassword')}</h2><p class="muted" style="margin:0">${T('setPasswordHelp')}</p>
+        <label>${T('newPassword')}<input type="${typ}" data-k="np_pass" value="${esc(A.f.np_pass || '')}" autocomplete="new-password" ${A.user ? '' : 'disabled'}/></label>
+        <label>${T('confirmPassword')}<input type="${typ}" data-k="np_pass2" value="${esc(A.f.np_pass2 || '')}" autocomplete="new-password" ${A.user ? '' : 'disabled'}/></label>
+        <button type="button" class="lk" data-act="togglePass" style="align-self:flex-start">${A.showPass ? T('hidePassword') : T('showPassword')}</button>
+        ${A.msg ? `<div class="err" role="alert">${esc(A.msg)}</div>` : ''}${A.user ? '' : `<div class="muted">…</div>`}
+        <button class="btn" data-act="savePassword" ${A.sending || !A.user ? 'disabled' : ''}>${A.sending ? T('sending') : T('savePassword')}</button>
+        <button type="button" class="lk" data-act="cancelRecovery" style="align-self:flex-start">${T('backLogin')}</button></div>`);
+      return;
+    }
     if (!A.user) {
-      root.innerHTML = `<div class="col" style="max-width:420px;margin:40px auto;padding:0 16px"><div class="row between"><img src="assets/logo-color.svg" alt="JKINnovations" style="height:60px;width:auto"/><div class="row" style="gap:6px">${langBtns()}</div></div>
-        <div class="card col"><h2>${T('login')}</h2><label>${T('email')}<input type="email" data-k="li_email" value="${esc(A.f.li_email)}" autocomplete="username"/></label><label>${T('password')}<input type="password" data-k="li_pass" autocomplete="current-password"/></label>
-        ${A.msg ? `<div class="err">${esc(A.msg)}</div>` : ''}<button class="btn" data-act="login">${T('login')}</button></div></div>`; return;
+      if (A.gate === 'sent') {
+        root.innerHTML = authShell(`<div class="card auth-card col"><h2>${T('forgot')}</h2><div class="ok" role="status">${T('resetSent')}</div><button class="btn sec" data-act="backLogin">${T('backLogin')}</button></div>`);
+        return;
+      }
+      if (A.gate === 'forgot') {
+        root.innerHTML = authShell(`<div class="card auth-card col"><h2>${T('forgot')}</h2><p class="muted" style="margin:0">${T('forgotHelp')}</p>
+          <label>${T('email')}<input type="email" data-k="li_email" value="${esc(A.f.li_email || '')}" autocomplete="username"/></label>
+          ${A.msg ? `<div class="err" role="alert">${esc(A.msg)}</div>` : ''}
+          <button class="btn" data-act="sendReset" ${A.sending ? 'disabled' : ''}>${A.sending ? T('sending') : T('sendReset')}</button>
+          <button type="button" class="lk" data-act="backLogin" style="align-self:flex-start">${T('backLogin')}</button></div>`);
+        return;
+      }
+      root.innerHTML = authShell(`<div class="card auth-card col"><h2>${T('login')}</h2><label>${T('email')}<input type="email" data-k="li_email" value="${esc(A.f.li_email || '')}" autocomplete="username"/></label><label>${T('password')}<input type="password" data-k="li_pass" autocomplete="current-password"/></label>
+        <button type="button" class="lk" data-act="forgot" style="align-self:flex-start">${T('forgot')}</button>
+        ${A.msg ? `<div class="err" role="alert">${esc(A.msg)}</div>` : ''}<button class="btn" data-act="login">${T('login')}</button></div>`); return;
     }
     if (!A.ok) { root.innerHTML = `<div class="card col" style="max-width:520px;margin:40px auto"><b class="err">${T('noAccess')}</b><div class="muted">${esc(A.user.email)}</div><button class="btn sec" data-act="logout">${T('logout')}</button></div>`; return; }
     if (!A.D) { root.innerHTML = `<div style="padding:40px;text-align:center" class="muted">${A.toast ? esc(A.toast) : '…'}</div>`; return; }
@@ -243,8 +361,58 @@
   const acts = {
     lang: el => { JK.setLang(el.dataset.v); A.rLang = el.dataset.v; render(); },
     nav: el => { A.view = el.dataset.v; render(); }, reload: () => loadAll(), print: () => window.print(),
+    csvProd: () => {
+      const blob = new Blob(['\uFEFF' + prodCsv()], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'resumen-produccion-' + todayLA() + '.csv';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    },
     login: async () => { A.msg = ''; const { data, error } = await sb().auth.signInWithPassword({ email: (A.f.li_email || '').trim(), password: document.querySelector('[data-k=li_pass]').value }); if (error) { A.msg = T('eLogin'); return render(); } await afterAuth(data.user); },
-    logout: async () => { await sb().auth.signOut(); A.user = null; A.ok = false; A.D = null; render(); },
+    forgot: () => { A.gate = 'forgot'; A.msg = ''; render(); },
+    backLogin: () => { A.gate = ''; A.msg = ''; A.sending = false; render(); },
+    togglePass: () => {
+      const p1 = document.querySelector('[data-k=np_pass]'), p2 = document.querySelector('[data-k=np_pass2]');
+      if (p1) A.f.np_pass = p1.value; if (p2) A.f.np_pass2 = p2.value;
+      A.showPass = !A.showPass; render();
+    },
+    sendReset: async () => {
+      if (A.sending) return;
+      const email = (document.querySelector('[data-k=li_email]') ? document.querySelector('[data-k=li_email]').value : A.f.li_email || '').trim();
+      A.f.li_email = email;
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { A.msg = T('eEmail'); return render(); }
+      A.sending = true; A.msg = ''; render();
+      const { error } = await sb().auth.resetPasswordForEmail(email, { redirectTo: adminRedirect() });
+      A.sending = false;
+      if (error) { A.msg = T('eReset'); return render(); }
+      A.gate = 'sent'; A.msg = ''; render();
+    },
+    savePassword: async () => {
+      if (A.sending) return;
+      const p1 = document.querySelector('[data-k=np_pass]') ? document.querySelector('[data-k=np_pass]').value : '';
+      const p2 = document.querySelector('[data-k=np_pass2]') ? document.querySelector('[data-k=np_pass2]').value : '';
+      A.f.np_pass = p1; A.f.np_pass2 = p2;
+      if (p1.length < 8) { A.msg = T('ePassShort'); return render(); }
+      if (p1 !== p2) { A.msg = T('ePassMatch'); return render(); }
+      A.sending = true; A.msg = ''; render();
+      const { data, error } = await sb().auth.updateUser({ password: p1 });
+      A.sending = false;
+      if (error) { A.msg = T('ePassSave'); return render(); }
+      A.f.np_pass = ''; A.f.np_pass2 = ''; A.showPass = false; clearRecovery();
+      const clean = new URL(location.href); clean.hash = '';
+      history.replaceState(null, '', clean.pathname + clean.search + clean.hash);
+      await afterAuth((data && data.user) || A.user);
+    },
+    cancelRecovery: async () => {
+      clearRecovery(); A.f.np_pass = ''; A.f.np_pass2 = ''; A.showPass = false; A.msg = ''; A.sending = false; A.gate = '';
+      try { await sb().auth.signOut(); } catch (e) {}
+      A.user = null; A.ok = false; A.D = null;
+      const clean = new URL(location.href); clean.hash = '';
+      history.replaceState(null, '', clean.pathname + clean.search);
+      render();
+    },
+    logout: async () => { clearRecovery(); A.gate = ''; await sb().auth.signOut(); A.user = null; A.ok = false; A.D = null; render(); },
     newSchool: () => { A.schoolForm = 'new'; Object.assign(A.f, { sc_name: '', sc_collector: '', sc_contact: '', sc_logo: '' }); render(); },
     editSchool: el => { const s = D().sch[el.dataset.id]; A.schoolForm = s.id; Object.assign(A.f, { sc_name: s.name, sc_collector: s.collector, sc_contact: s.contact, sc_logo: s.logo_path || '' }); render(); },
     cancelSchool: () => { A.schoolForm = null; render(); },
@@ -286,6 +454,12 @@
       A.delSel = null; A.dq = {}; A.f.dl_by = ''; A.f.dl_notes = ''; await loadAll(); toast(T('msgDelOk')); }
   };
   root.addEventListener('click', e => { const el = e.target.closest('[data-act]'); if (!el || el.tagName === 'SELECT' || el.type === 'checkbox') return; if (acts[el.dataset.act]) acts[el.dataset.act](el); });
+  root.addEventListener('keydown', e => {
+    if (e.key !== 'Enter' || e.target.closest('button,textarea,select')) return;
+    const card = e.target.closest('.auth-card'); if (!card) return;
+    const btn = card.querySelector('.btn:not([disabled])');
+    if (btn && acts[btn.dataset.act]) { e.preventDefault(); acts[btn.dataset.act](btn); }
+  });
   root.addEventListener('change', e => { const t = e.target;
     if (t.dataset.act && (t.tagName === 'SELECT' || t.type === 'checkbox')) { acts[t.dataset.act](t); return; }
     set(t, true); });
@@ -293,14 +467,29 @@
   function set(t, fire) {
     if (t.dataset.m) { A[t.dataset.m][t.dataset.k] = t.value; return; }
     if (t.dataset.k) { A.f[t.dataset.k] = t.value; if (fire && t.dataset.re !== undefined) render(); return; }
-    if (t.dataset.s) { A[t.dataset.s] = t.value; if (t.dataset.clr) A[t.dataset.clr] = 'all'; if (fire) render(); }
+    if (t.dataset.s) { A[t.dataset.s] = t.type === 'checkbox' ? t.checked : t.value; if (t.dataset.clr) A[t.dataset.clr] = 'all'; if (fire) render(); }
   }
   async function afterAuth(user) {
-    A.user = user; const { data } = await sb().from('admins').select('user_id').maybeSingle(); A.ok = !!data; render(); if (A.ok) loadAll();
+    A.user = user;
+    if (A.recovery) { render(); return; }
+    const { data } = await sb().from('admins').select('user_id').maybeSingle();
+    if (A.recovery) { render(); return; }
+    A.ok = !!data; render(); if (A.ok) loadAll();
   }
   (async function init() {
+    if (recoveryFromHash()) markRecovery();
+    else { try { A.recovery = sessionStorage.getItem('jk_pw_recovery') === '1'; } catch (e) { A.recovery = false; } }
     render(); if (!JK.configured()) return;
-    const { data } = await sb().auth.getSession(); if (data.session) await afterAuth(data.session.user);
+    sb().auth.onAuthStateChange((event, session) => {
+      if (event !== 'PASSWORD_RECOVERY') return;
+      markRecovery();
+      if (session && session.user) A.user = session.user;
+      A.authReady = true; A.gate = ''; A.msg = ''; render();
+    });
+    const { data } = await sb().auth.getSession();
+    A.authReady = true;
+    if (A.recovery) { if (data.session && data.session.user) A.user = data.session.user; render(); return; }
+    if (data.session) await afterAuth(data.session.user);
   })();
 })();
 

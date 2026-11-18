@@ -70,4 +70,15 @@ td input,td select{min-height:38px;padding:6px 8px}td input.sm{width:76px}
   .sheet thead{display:table-header-group}
   .sheet h2,.sheet h3{break-after:avoid;page-break-after:avoid}
   .sheet .scroll{overflow:visible}
+  .sheet.prodsum{font-size:9pt}
+  .sheet.prodsum table{font-size:8pt}
+  .sheet.prodsum th,.sheet.prodsum td{padding:3px 4px}
+  .sheet.prodsum th.grp{print-color-adjust:exact;-webkit-print-color-adjust:exact}
 }
+.sheet.prodsum{max-width:none}
+.sheet.prodsum .matrix{min-width:760px}
+.sheet.prodsum th.sz,.sheet.prodsum td.sz{text-align:center;font-variant-numeric:tabular-nums;padding:6px 4px;min-width:34px}
+.sheet.prodsum th.grp{text-align:center;background:var(--blue-tint);color:var(--deep-blue);letter-spacing:.08em}
+.sheet.prodsum tr.grand td{border-top:2px solid var(--deep-blue);font-weight:800;background:#f7f4f1}
+.sheet.prodsum h2{margin-top:18px}
+.sheet.prodsum .note{font-size:13px;color:#444;margin:0 0 12px}
