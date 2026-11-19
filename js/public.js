@@ -62,7 +62,7 @@
   const err = k => `<span class="err" ${S.errs[k] ? 'role="alert"' : ''}>${esc(S.errs[k] || '')}</span>`;
 
   function schoolCard() {
-    const d = S.data, lg = d.school.logo;
+    const d = S.data, lg = JK.logoSrc(d.school.logo);
     const mark = lg ? `<img src="${esc(lg)}" alt="${esc(d.school.name)}" style="height:84px;width:auto;max-width:110px;object-fit:contain"/>`
       : `<div style="width:56px;height:56px;border-radius:12px;background:var(--blue-tint);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:20px">${esc((d.school.name.match(/\b\w/g) || []).slice(0, 2).join('').toUpperCase())}</div>`;
     return `<div class="card row" style="gap:16px">${mark}<div style="flex:1;min-width:200px"><div class="eyebrow">${T('school')}</div><h2>${esc(d.school.name)}</h2>

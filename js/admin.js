@@ -1,6 +1,6 @@
 // Panel privado de Norma. La protección real está en el servidor (Supabase Auth + RLS + funciones admin_*).
 (function () {
-  const { T, esc, money, loc, fd, fdt, szl, dsc } = JK;
+  const { T, esc, money, loc, fd, fdt, szl, dsc, logoSrc } = JK;
   const root = document.getElementById('app');
   const A = { user: null, ok: false, msg: '', D: null, loading: false, view: 'reports', fSchool: 'all', fPeriod: 'all', orderSel: null, delSel: null, cfg: null, newFor: null, schoolForm: null, editProd: null,
     toast: '', rType: 'prodsum', rGroup: 'all', rLang: JK.lang, rPaper: 'letter', rStatus: 'all', rByGroup: false, gate: '', recovery: false, showPass: false, sending: false, authReady: false, f: {}, pq: {}, eq: {}, dq: {}, pf: {}, zoom: '' };
@@ -109,6 +109,54 @@
     Object.assign(A.f, { pr_es: '', pr_en: '', pr_cat: 'school', pr_colors: '', pr_child: '', pr_adult: '', pr_price: '', pr_design: '', pr_pers: 'none', pr_photo: '', pr_code: '', pr_mes: '', pr_men: '', pr_more: '', pr_map: '' });
   }
   const publicUrl = p => new URL('index.html', location.href).href + '?p=' + p.slug;
+  const LOGO_BUCKET = 'school-logos';
+  const LOGO_MAX = 2 * 1024 * 1024;
+  const LOGO_TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/webp': 'webp', 'image/svg+xml': 'svg' };
+  const logoKind = file => {
+    const t = (file && file.type || '').toLowerCase();
+    if (LOGO_TYPES[t]) return { mime: t === 'image/jpg' ? 'image/jpeg' : t, ext: LOGO_TYPES[t] };
+    const m = !t && String(file && file.name || '').toLowerCase().match(/\.(png|jpe?g|webp|svg)$/);
+    const ext = m && (m[1] === 'jpeg' ? 'jpg' : m[1]);
+    const mime = { png: 'image/png', jpg: 'image/jpeg', webp: 'image/webp', svg: 'image/svg+xml' }[ext];
+    return mime ? { mime, ext } : null;
+  };
+  const revokeLogoPreview = () => { if (A.logoPreview) { try { URL.revokeObjectURL(A.logoPreview); } catch (e) {} A.logoPreview = ''; } };
+  const resetLogoPick = () => { revokeLogoPreview(); A.logoFile = null; A.logoErr = ''; A.logoBusy = false; };
+  const storageErrText = error => !error ? '' : typeof error === 'string' ? error : [error.message, error.error, error.statusCode, error.status].filter(Boolean).join(' ');
+  const storageKeyFromLogo = value => {
+    const s = String(value || '');
+    const marker = '/storage/v1/object/public/' + LOGO_BUCKET + '/';
+    const at = s.indexOf(marker);
+    let key = at >= 0 ? s.slice(at + marker.length).split('?')[0] : s;
+    try { key = decodeURIComponent(key); } catch (e) { return ''; }
+    return /^[0-9a-f-]{36}\.(png|jpg|webp|svg)$/i.test(key) ? key : '';
+  };
+  async function removeStoredLogo(value) {
+    const key = storageKeyFromLogo(value);
+    if (!key) return;
+    try { await sb().storage.from(LOGO_BUCKET).remove([key]); } catch (e) {}
+  }
+  async function uploadSchoolLogo(file) {
+    const kind = logoKind(file);
+    if (!kind || !file.size) { A.logoErr = T('logoType'); toast(A.logoErr); return ''; }
+    if (file.size > LOGO_MAX) { A.logoErr = T('logoSize'); toast(A.logoErr); return ''; }
+    const path = JK.uuid() + '.' + kind.ext;
+    const body = (file.type || '').toLowerCase() === kind.mime ? file : new Blob([await file.arrayBuffer()], { type: kind.mime });
+    const { data, error } = await sb().storage.from(LOGO_BUCKET).upload(path, body, { contentType: kind.mime, cacheControl: '3600', upsert: false });
+    if (error) {
+      const raw = storageErrText(error);
+      A.logoErr = /bucket|not found|row-level|policy|violates|42501|\b403\b/i.test(raw) ? T('logoNeedSql') : T('logoUpload');
+      toast(A.logoErr);
+      return '';
+    }
+    const pub = sb().storage.from(LOGO_BUCKET).getPublicUrl((data && data.path) || path);
+    const url = pub && pub.data && pub.data.publicUrl;
+    if (!url || url.length > 300) {
+      try { await sb().storage.from(LOGO_BUCKET).remove([path]); } catch (e) {}
+      A.logoErr = T('logoUpload'); toast(A.logoErr); return '';
+    }
+    return url;
+  }
 
   // ---- validaciones previas a abrir (el servidor las repite) ----
   function validate(p) {
@@ -125,15 +173,16 @@
       <label style="flex:1 1 240px">${T('orderPeriod')}<select data-s="fPeriod" data-re>${opts([{ v: 'all', l: T('fAll') }, ...ps.map(p => ({ v: p.id, l: (A.fSchool === 'all' ? D().sch[p.school_id].name + ' · ' : '') + rng(p) }))], A.fPeriod)}</select></label></div>`;
   }
   function vSummary() {
-    const st = fPeriods().map(p => ({ p, pre: pieceQty(p.id, 'preorder'), x: stat(p) }));
-    const tot = { pre: 0, conf: 0, d: 0, p: 0 }; st.forEach(({ pre, x }) => { tot.pre += pre; tot.conf += x.ordered; tot.d += x.delivered; tot.p += x.pending; });
+    const st = fPeriods().map(p => ({ p, pre: pieceQty(p.id, 'preorder'), preN: D().orders.filter(o => o.period_id === p.id && o.status === 'preorder').length, x: stat(p) }));
+    const tot = { pre: 0, preN: 0, conf: 0, d: 0, p: 0 }; st.forEach(({ pre, preN, x }) => { tot.pre += pre; tot.preN += preN; tot.conf += x.ordered; tot.d += x.delivered; tot.p += x.pending; });
+    const pendingCard = `<div class="card col" id="pending-review" style="border:2px solid var(--light-terracotta);background:var(--terracotta-tint)"><div class="row between" style="align-items:flex-end"><div><div class="eyebrow">${T('pendingReview')}</div><div class="row" style="align-items:flex-end;gap:28px"><div><div class="stat" data-pending-orders>${tot.preN}</div><div style="font-weight:700">${T('pendingReviewOrders')}</div></div><div><div class="stat" data-pending-pieces>${tot.pre}</div><div style="font-weight:700">${T('pendingReviewPieces')}</div></div></div></div><button class="btn" data-act="openPending">${T('reviewPending')}</button></div></div>`;
     const stats = [['prePieces', tot.pre], ['confPieces', tot.conf], ['delivered', tot.d], ['pending', tot.p]].map(([k, v]) => `<div class="card"><div class="stat">${v}</div><div class="muted">${T(k)}</div></div>`).join('');
     const checks = st.map(({ p, pre, x }) => { const a = x.ordered, b = prodRows(p.id).reduce((q, r) => q + r.ordered, 0), c = D().groups.filter(g => g.period_id === p.id).reduce((q, g) => q + act(p.id).filter(l => l.group_id === g.id).reduce((z, l) => z + l.qty, 0), 0), d = x.delivered + x.pending, ok = a === b && b === c && c === d, waiting = a === 0 && pre > 0;
       return `<tr><td>${esc(pname(p))}</td><td class="num">${a}</td><td class="num">${b}</td><td class="num">${c}</td><td class="num">${d}</td><td><b style="color:${waiting ? '#8A5A00' : ok ? '#2E6B4A' : '#B3261E'}">${waiting ? T('preOnly') : ok ? T('okTxt') : T('badTxt')}</b></td></tr>`; }).join('');
-    return `<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">${stats}</div>
+    return `${pendingCard}<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">${stats}</div>
       <div class="row between"><div class="muted">${T('homeCountNote')}</div><button class="btn sm" data-act="openProdSum">${T('openProdSum')}</button></div>
-      <div class="card scroll"><h3 style="margin-bottom:10px">${T('nSchools')}</h3><table><thead><tr><th>${T('school')}</th><th>${T('orderPeriod')}</th><th>${T('status')}</th><th class="num">${T('prePieces')}</th><th class="num">${T('confPieces')}</th><th class="num">${T('delivered')}</th><th class="num">${T('pendingShort')}</th></tr></thead><tbody>
-      ${st.map(({ p, pre, x }) => `<tr><td>${esc(D().sch[p.school_id].name)}</td><td>${rng(p)}</td><td>${stl(p)}</td><td class="num"><b>${pre}</b></td><td class="num">${x.ordered}</td><td class="num">${x.delivered}</td><td class="num">${x.pending}</td></tr>`).join('')}</tbody></table></div>
+      <div class="card scroll"><h3 style="margin-bottom:10px">${T('nSchools')}</h3><table><thead><tr><th>${T('school')}</th><th>${T('orderPeriod')}</th><th>${T('status')}</th><th class="num">${T('pendingPrePieces')}</th><th class="num">${T('confPieces')}</th><th class="num">${T('delivered')}</th><th class="num">${T('pendingShort')}</th></tr></thead><tbody>
+      ${st.map(({ p, pre, x }) => `<tr><td>${esc(D().sch[p.school_id].name)}</td><td>${rng(p)}</td><td>${stl(p)}</td><td class="num"><b data-pre-pieces>${pre}</b></td><td class="num">${x.ordered}</td><td class="num">${x.delivered}</td><td class="num">${x.pending}</td></tr>`).join('')}</tbody></table></div>
       <div class="card scroll"><h3>${T('checks')}</h3><div class="muted" style="margin-bottom:10px">${T('checksNote')}</div><table><thead><tr><th>${T('orderPeriod')}</th><th class="num">${T('cOrders')}</th><th class="num">${T('cProd')}</th><th class="num">${T('cPack')}</th><th class="num">${T('cDel')}</th><th></th></tr></thead><tbody>${checks}</tbody></table></div>`;
   }
   function vSchools() {
@@ -141,9 +190,16 @@
     const fresh = sf === 'new' ? `<h3>${T('schoolDates')}</h3><div class="grid"><label>${T('openFrom')}<input type="date" data-k="sc_open" value="${esc(f.sc_open)}"/></label><label>${T('openUntil')}<input type="date" data-k="sc_close" value="${esc(f.sc_close)}"/></label>
         <label>${T('mode')}<select data-k="sc_mode">${opts([{ v: 'coord', l: T('mCoord') }, { v: 'each', l: T('mEach') }, { v: 'mixed', l: T('mMixed') }], f.sc_mode || 'mixed')}</select></label></div>
         <label>${T('groupLines')}<textarea data-k="sc_groups_text" rows="4" placeholder="Anciso | KN&#10;Bessolo | KN">${esc(f.sc_groups_text || '')}</textarea></label><div class="muted">${T('groupHint')}</div>` : '';
+    const savedLogo = logoSrc(f.sc_logo);
+    const previewSrc = A.logoPreview || savedLogo;
+    const logoBox = `<div class="col" style="gap:8px"><span style="font-size:13px;font-weight:600">${T('logoFile')}</span>
+      <div class="row" style="align-items:center">${previewSrc ? `<img class="logo-preview" src="${esc(previewSrc)}" alt="${esc(T('logoPreview'))}"/>` : ''}
+        <label class="btn sec filebtn">${T('uploadLogo')}<input class="filepick" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml,.png,.jpg,.jpeg,.webp,.svg" data-logo aria-label="${esc(T('uploadLogo'))}" ${A.logoBusy ? 'disabled' : ''}/></label>
+        ${(A.logoFile || (f.sc_logo || '').trim() || previewSrc) ? `<button type="button" class="btn ghost" data-act="clearLogo" ${A.logoBusy ? 'disabled' : ''}>${T('remove')}</button>` : ''}</div>
+      <div class="muted">${T('logoSlot')}</div>${A.logoErr ? `<div class="err" role="alert">${esc(A.logoErr)}</div>` : ''}</div>`;
     const form = sf ? `<div style="border:1px solid var(--line);border-radius:12px;padding:16px;background:var(--paper)" class="col"><h3>${sf === 'new' ? T('addSchool') : T('editSchool')}</h3><div class="muted">${sf === 'new' ? T('schoolSetup') : ''}</div>
-      <div class="grid"><label>${T('name')}<input data-k="sc_name" value="${esc(f.sc_name)}"/></label><label>${T('collector')}<input data-k="sc_collector" value="${esc(f.sc_collector)}"/></label><label>${T('contactData')}<input data-k="sc_contact" value="${esc(f.sc_contact)}"/></label><label>${T('logoFile')}<input data-k="sc_logo" value="${esc(f.sc_logo)}" placeholder="assets/img/school-harder.png"/></label></div>
-      <div class="muted">${T('logoSlot')}</div>${fresh}<div class="row"><button class="btn" data-act="saveSchool">${T('save')}</button><button class="btn ghost" data-act="cancelSchool">${T('cancel')}</button></div></div>` : '';
+      <div class="grid"><label>${T('name')}<input data-k="sc_name" value="${esc(f.sc_name)}"/></label><label>${T('collector')}<input data-k="sc_collector" value="${esc(f.sc_collector)}"/></label><label>${T('contactData')}<input data-k="sc_contact" value="${esc(f.sc_contact)}"/></label></div>
+      ${logoBox}${fresh}<div class="row"><button class="btn" data-act="saveSchool" ${A.logoBusy ? 'disabled' : ''}>${A.logoBusy ? T('uploadingLogo') : T('save')}</button><button class="btn ghost" data-act="cancelSchool" ${A.logoBusy ? 'disabled' : ''}>${T('cancel')}</button></div></div>` : '';
     const schools = `<div class="card col"><div class="row between"><h2>${T('nSchoolsOnly')}</h2><button class="btn" data-act="newSchool">+ ${T('addSchool')}</button></div>${form}<div class="scroll"><table><thead><tr><th>${T('name')}</th><th>${T('collector')}</th><th>${T('contactData')}</th><th></th></tr></thead><tbody>
       ${D().schools.map(s => `<tr><td><b>${esc(s.name)}</b></td><td>${esc(s.collector)}</td><td>${esc(s.contact)}</td><td><button class="btn ghost sm" data-act="editSchool" data-id="${s.id}">${T('edit')}</button></td></tr>`).join('')}</tbody></table></div></div>`;
     const blocks = D().schools.filter(s => A.fSchool === 'all' || s.id === A.fSchool).map(s => {
@@ -191,12 +247,13 @@
   }
 
   function vOrders() {
-    const ids = fPeriods().map(p => p.id), g = A.f.o_group || 'all';
+    const ids = fPeriods().map(p => p.id), g = A.f.o_group || 'all', status = A.f.o_status || 'all';
     const sig = o => o.period_id + '|' + o.registrant_name.toLowerCase() + '|' + D().lines.filter(l => l.order_id === o.id).map(l => [l.group_id, l.variant_key, l.qty, l.personalization].join(':')).sort().join(',');
     const sigs = {}; D().orders.filter(o => o.status === 'active').forEach(o => { const k = sig(o); sigs[k] = (sigs[k] || 0) + 1; });
-    const rows = D().orders.filter(o => ids.includes(o.period_id) && (g === 'all' || D().lines.some(l => l.order_id === o.id && l.group_id === g))).sort((a, b) => b.created_at.localeCompare(a.created_at));
+    const rows = D().orders.filter(o => ids.includes(o.period_id) && (status === 'all' || o.status === status) && (g === 'all' || D().lines.some(l => l.order_id === o.id && l.group_id === g))).sort((a, b) => b.created_at.localeCompare(a.created_at));
     const gopts = [{ v: 'all', l: T('fAll') }, ...fPeriods().flatMap(p => D().groups.filter(x => x.period_id === p.id).map(x => ({ v: x.id, l: (fPeriods().length > 1 ? rng(p) + ' · ' : '') + gl(x) })))];
-    return `<div class="card col"><div class="row between"><h3>${T('nOrders')} (${rows.length})</h3><label style="min-width:240px">${T('teacher')}<select data-k="o_group" data-re>${opts(gopts, g)}</select></label></div><div class="scroll"><table><thead><tr><th>#</th><th>${T('registeredAt')}</th><th>${T('registeredBy')}</th><th>${T('orderPeriod')}</th><th class="num">${T('ordered')}</th><th>${T('status')}</th><th></th></tr></thead><tbody>
+    const sopts = [{ v: 'all', l: T('fAll') }, { v: 'preorder', l: T('filterPreorder') }, { v: 'active', l: T('filterActive') }, { v: 'cancelled', l: T('stCancelled') }];
+    return `<div class="card col"><div class="row between"><h3>${T('nOrders')} (${rows.length})</h3><div class="row" style="flex:1;justify-content:flex-end"><label style="min-width:200px">${T('status')}<select data-k="o_status" data-re>${opts(sopts, status)}</select></label><label style="min-width:220px">${T('teacher')}<select data-k="o_group" data-re>${opts(gopts, g)}</select></label></div></div><div class="scroll"><table><thead><tr><th>#</th><th>${T('registeredAt')}</th><th>${T('registeredBy')}</th><th>${T('orderPeriod')}</th><th class="num">${T('ordered')}</th><th>${T('status')}</th><th></th></tr></thead><tbody>
       ${rows.map(o => `<tr><td><b>${esc(o.number)}</b></td><td>${fdt(o.created_at)}</td><td>${esc(o.registrant_name)}<div class="muted">${esc(o.registrant_contact)}</div></td><td>${esc(pname(D().per[o.period_id]))}</td><td class="num">${D().lines.filter(l => l.order_id === o.id).reduce((a, l) => a + l.qty, 0)}</td><td>${T(o.status === 'preorder' ? 'stPreorder' : o.status === 'active' ? 'stActive' : 'stCancelled')}${o.status === 'active' && sigs[sig(o)] > 1 ? `<div class="err">${T('dupFlag')}</div>` : ''}</td><td><button class="btn sec sm" data-act="openOrder" data-id="${o.id}">${T('detail')}</button></td></tr>`).join('')}</tbody></table></div></div>${orderDetail()}`;
   }
   function orderDetail() {
@@ -251,8 +308,8 @@
     const rowT = (l, extra = '') => `<tr>${extra}<td>${esc(dsc(l, rl))}<div>${esc(l.design || '')}</div></td><td>${esc(loc(l.color_name, rl))}</td><td>${esc(szl(l, rl))}</td>`;
     const rg = ps.length === 1 && D().groups.some(g => g.id === A.rGroup && g.period_id === ps[0].id) ? A.rGroup : 'all';
     ps.forEach(p => {
-      const s = D().sch[p.school_id], gsel = rg === 'all' ? null : D().grp[rg];
-      const head = (title, g) => `<div class="${A.rType === 'prodsum' ? 'sheet prodsum' : 'sheet'}"><div class="row between" style="align-items:flex-start;border-bottom:2px solid var(--deep-blue);padding-bottom:12px;margin-bottom:14px"><div><h1>${title}</h1><div style="font-size:15px;font-weight:700;margin-top:4px">${esc(s.name)} · ${rng(p, rl)}</div><div style="font-size:13px">${g ? esc(gl(g, rl)) : ''}</div></div><div class="row" style="gap:14px">${s.logo_path ? `<img src="${esc(s.logo_path)}" alt="" style="height:64px;width:auto"/>` : ''}<img src="assets/logo-color.svg" alt="" style="height:52px;width:auto"/></div></div>
+      const s = D().sch[p.school_id], gsel = rg === 'all' ? null : D().grp[rg], schoolLogo = logoSrc(s.logo_path);
+      const head = (title, g) => `<div class="${A.rType === 'prodsum' ? 'sheet prodsum' : 'sheet'}"><div class="row between" style="align-items:flex-start;border-bottom:2px solid var(--deep-blue);padding-bottom:12px;margin-bottom:14px"><div><h1>${title}</h1><div style="font-size:15px;font-weight:700;margin-top:4px">${esc(s.name)} · ${rng(p, rl)}</div><div style="font-size:13px">${g ? esc(gl(g, rl)) : ''}</div></div><div class="row" style="gap:14px">${schoolLogo ? `<img src="${esc(schoolLogo)}" alt="" style="height:64px;width:auto"/>` : ''}<img src="assets/logo-color.svg" alt="" style="height:52px;width:auto"/></div></div>
         <div style="font-size:12px;color:#555;margin-bottom:14px">${R('filters')}: ${R('school')}: ${esc(s.name)} · ${R('orderPeriod')}: ${rng(p, rl)} · ${R('teacher')}: ${gsel ? esc(gsel.teacher) : R('fAll')} · ${R('generated')}: ${now.toLocaleString(rl === 'es' ? 'es-US' : 'en-US')} · ID: <b>RPT-${code}-${p.id.slice(0, 4).toUpperCase()}${g ? '-' + g.id.slice(0, 4).toUpperCase() : ''}-${ymd}</b></div>`;
       const gs = D().groups.filter(g => g.period_id === p.id && (rg === 'all' || g.id === rg));
       if (A.rType === 'prodsum') { out.push(prodSummarySheet(p, s, rg, gsel, rl, R, head)); } else if (A.rType === 'preorders') { const ls = D().lines.filter(l => l.period_id === p.id && (rg === 'all' || l.group_id === rg) && D().ord[l.order_id].status !== 'cancelled'); out.push(head(R('r_preorders'), gsel) + `<table><thead><tr><th># / ${R('status')}</th><th>${R('registeredBy')}</th><th>${R('teacher')}</th><th>${R('product')}</th><th>${R('color')}</th><th>${R('size')}</th><th>${R('qty')}</th><th>${R('pers')}</th></tr></thead><tbody>${ls.map(l => { const o=D().ord[l.order_id]; return rowT(l, `<td>${esc(o.number)}<div>${R(o.status === 'preorder' ? 'stPreorder' : 'stActive')}</div></td><td>${esc(o.registrant_name)}</td><td>${esc(D().grp[l.group_id].teacher)}</td>`) + `<td>${l.qty}</td><td>${esc(l.personalization)}</td></tr>`; }).join('')}</tbody></table></div>`); } else if (A.rType === 'production') {
@@ -369,7 +426,7 @@
   }
 
   // ---- armado ----
-  const VIEWS = [['reports', 'nReports', vReports], ['summary', 'nSummary', vSummary], ['schools', 'nSchools', vSchools], ['orders', 'nOrders', vOrders], ['production', 'nProduction', vProduction], ['deliveries', 'nDeliveries', vDeliveries]];
+  const VIEWS = [['schools', 'nSchools', vSchools], ['orders', 'nOrders', vOrders], ['summary', 'nSummary', vSummary], ['production', 'nProduction', vProduction], ['deliveries', 'nDeliveries', vDeliveries], ['reports', 'nReports', vReports]];
   const langBtns = () => ['es', 'en'].map(l => `<button class="lang ${JK.lang === l ? 'on' : ''}" data-act="lang" data-v="${l}">${l.toUpperCase()}</button>`).join('');
   function render() {
     document.documentElement.lang = JK.lang;
@@ -423,6 +480,7 @@
     lang: el => { JK.setLang(el.dataset.v); A.rLang = el.dataset.v; render(); },
     nav: el => { A.view = el.dataset.v; render(); },
     openProdSum: () => { A.view = 'reports'; A.rType = 'prodsum'; A.rStatus = A.rStatus || 'all'; render(); },
+    openPending: () => { A.view = 'orders'; A.f.o_status = 'preorder'; A.orderSel = null; render(); },
     reload: () => loadAll(), print: () => window.print(),
     csvProd: () => {
       const blob = new Blob(['\uFEFF' + prodCsv()], { type: 'text/csv;charset=utf-8' });
@@ -476,23 +534,37 @@
       render();
     },
     logout: async () => { clearRecovery(); A.gate = ''; await sb().auth.signOut(); A.user = null; A.ok = false; A.D = null; render(); },
-    newSchool: () => { A.schoolForm = 'new'; A.editProd = null; Object.assign(A.f, { sc_name: '', sc_collector: '', sc_contact: '', sc_logo: '', sc_open: todayLA(), sc_close: '', sc_mode: 'mixed', sc_groups_text: '' }); render(); },
-    editSchool: el => { const s = D().sch[el.dataset.id]; A.schoolForm = s.id; Object.assign(A.f, { sc_name: s.name, sc_collector: s.collector, sc_contact: s.contact, sc_logo: s.logo_path || '' }); render(); },
-    cancelSchool: () => { A.schoolForm = null; render(); },
+    newSchool: () => { A.schoolForm = 'new'; A.editProd = null; resetLogoPick(); Object.assign(A.f, { sc_name: '', sc_collector: '', sc_contact: '', sc_logo: '', sc_open: todayLA(), sc_close: '', sc_mode: 'mixed', sc_groups_text: '' }); render(); },
+    editSchool: el => { const s = D().sch[el.dataset.id]; A.schoolForm = s.id; resetLogoPick(); Object.assign(A.f, { sc_name: s.name, sc_collector: s.collector, sc_contact: s.contact, sc_logo: s.logo_path || '' }); render(); },
+    cancelSchool: () => { A.schoolForm = null; resetLogoPick(); render(); },
+    clearLogo: () => { if (A.logoBusy) return; revokeLogoPreview(); A.logoFile = null; A.f.sc_logo = ''; A.logoErr = ''; render(); },
     saveSchool: async () => {
+      if (A.logoBusy) return;
       const f = A.f; if (!(f.sc_name || '').trim()) return toast(T('msgSchoolInvalid'));
       if (A.schoolForm === 'new') {
         if (!f.sc_open || !f.sc_close || f.sc_close < f.sc_open) return toast(T('msgPeriodInvalid'));
+        if (!parseGroupLines(f.sc_groups_text).length) return toast(T('vGroups'));
+      }
+      const previous = (f.sc_logo || '').trim();
+      let logo = previous;
+      if (A.logoFile) {
+        A.logoBusy = true; render();
+        logo = await uploadSchoolLogo(A.logoFile);
+        A.logoBusy = false;
+        if (!logo) return render();
+      }
+      if (A.schoolForm === 'new') {
         const groups = parseGroupLines(f.sc_groups_text);
-        if (!groups.length) return toast(T('vGroups'));
-        const r = await rpc('admin_create_school', { p_name: f.sc_name.trim(), p_collector: f.sc_collector || '', p_contact: f.sc_contact || '', p_logo: (f.sc_logo || '').trim(), p_open: f.sc_open, p_close: f.sc_close, p_mode: f.sc_mode || 'mixed', p_groups: groups });
-        if (r.error) return;
-        A.schoolForm = null; await loadAll();
+        const r = await rpc('admin_create_school', { p_name: f.sc_name.trim(), p_collector: f.sc_collector || '', p_contact: f.sc_contact || '', p_logo: logo, p_open: f.sc_open, p_close: f.sc_close, p_mode: f.sc_mode || 'mixed', p_groups: groups });
+        if (r.error) { if (logo !== previous) await removeStoredLogo(logo); return; }
+        resetLogoPick(); A.schoolForm = null; await loadAll();
         if (r.data && r.data.period_id) { A.fSchool = r.data.school_id; acts.cfg({ dataset: { id: r.data.period_id } }); }
         return toast(T('schoolReady'));
       }
-      const r = await rpc('admin_update_school', { p_school: A.schoolForm, p_name: f.sc_name.trim(), p_collector: f.sc_collector || '', p_contact: f.sc_contact || '', p_logo: (f.sc_logo || '').trim() });
-      if (r.error) return; A.schoolForm = null; await loadAll(); toast(T('msgSaved'));
+      const r = await rpc('admin_update_school', { p_school: A.schoolForm, p_name: f.sc_name.trim(), p_collector: f.sc_collector || '', p_contact: f.sc_contact || '', p_logo: logo });
+      if (r.error) { if (logo !== previous) await removeStoredLogo(logo); return; }
+      if (previous !== logo) await removeStoredLogo(previous);
+      resetLogoPick(); A.schoolForm = null; await loadAll(); toast(T('msgSaved'));
     },
     newPeriod: el => { A.newFor = el.dataset.id; Object.assign(A.f, { np_open: todayLA(), np_close: '', np_mode: 'mixed' }); render(); }, cancelNew: () => { A.newFor = null; render(); },
     createPeriod: async el => { const f = A.f; if (!f.np_open || !f.np_close || f.np_close < f.np_open) return toast(T('msgPeriodInvalid'));
@@ -561,6 +633,15 @@
     if (btn && acts[btn.dataset.act]) { e.preventDefault(); acts[btn.dataset.act](btn); }
   });
   root.addEventListener('change', e => { const t = e.target;
+    if (t.dataset.logo !== undefined) {
+      const file = t.files && t.files[0];
+      if (!file || A.logoBusy) return;
+      const kind = logoKind(file);
+      revokeLogoPreview(); A.logoFile = null;
+      if (!kind || !file.size) { A.logoErr = T('logoType'); toast(A.logoErr); render(); return; }
+      if (file.size > LOGO_MAX) { A.logoErr = T('logoSize'); toast(A.logoErr); render(); return; }
+      A.logoErr = ''; A.logoFile = file; A.logoPreview = URL.createObjectURL(file); render(); return;
+    }
     if (t.dataset.act && (t.tagName === 'SELECT' || t.type === 'checkbox')) { acts[t.dataset.act](t); return; }
     set(t, true); });
   root.addEventListener('input', e => { if (e.target.tagName !== 'SELECT' && e.target.type !== 'checkbox') set(e.target, false); });
