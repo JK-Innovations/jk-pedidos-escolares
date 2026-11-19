@@ -2,7 +2,7 @@
 (function () {
   const { T, esc, money, loc, fd, fdt, szl, dsc, logoSrc } = JK;
   const root = document.getElementById('app');
-  const A = { user: null, ok: false, msg: '', D: null, loading: false, view: 'reports', fSchool: 'all', fPeriod: 'all', orderSel: null, delSel: null, cfg: null, newFor: null, schoolForm: null, editProd: null,
+  const A = { user: null, ok: false, msg: '', D: null, loading: false, view: 'schools', fSchool: 'all', fPeriod: 'all', orderSel: null, delSel: null, cfg: null, newFor: null, schoolForm: null, editProd: null,
     toast: '', rType: 'prodsum', rGroup: 'all', rLang: JK.lang, rPaper: 'letter', rStatus: 'all', rByGroup: false, gate: '', recovery: false, showPass: false, sending: false, authReady: false, f: {}, pq: {}, eq: {}, dq: {}, pf: {}, zoom: '' };
   const sb = () => JK.sb();
   const recoveryFromHash = () => { const raw = (location.hash || '').replace(/^#/, ''); return !!raw && new URLSearchParams(raw).get('type') === 'recovery'; };
@@ -172,18 +172,23 @@
     return `<div class="no-print card row" style="gap:14px;padding:14px 18px"><label style="flex:1 1 200px">${T('school')}<select data-s="fSchool" data-re data-clr="fPeriod">${opts([{ v: 'all', l: T('fAll') }, ...D().schools.map(s => ({ v: s.id, l: s.name }))], A.fSchool)}</select></label>
       <label style="flex:1 1 240px">${T('orderPeriod')}<select data-s="fPeriod" data-re>${opts([{ v: 'all', l: T('fAll') }, ...ps.map(p => ({ v: p.id, l: (A.fSchool === 'all' ? D().sch[p.school_id].name + ' · ' : '') + rng(p) }))], A.fPeriod)}</select></label></div>`;
   }
-  function vSummary() {
-    const st = fPeriods().map(p => ({ p, pre: pieceQty(p.id, 'preorder'), preN: D().orders.filter(o => o.period_id === p.id && o.status === 'preorder').length, x: stat(p) }));
+  function periodStats() {
+    return fPeriods().map(p => ({ p, pre: pieceQty(p.id, 'preorder'), preN: D().orders.filter(o => o.period_id === p.id && o.status === 'preorder').length, x: stat(p) }));
+  }
+  function summaryHead() {
+    const st = periodStats();
     const tot = { pre: 0, preN: 0, conf: 0, d: 0, p: 0 }; st.forEach(({ pre, preN, x }) => { tot.pre += pre; tot.preN += preN; tot.conf += x.ordered; tot.d += x.delivered; tot.p += x.pending; });
     const pendingCard = `<div class="card col" id="pending-review" style="border:2px solid var(--light-terracotta);background:var(--terracotta-tint)"><div class="row between" style="align-items:flex-end"><div><div class="eyebrow">${T('pendingReview')}</div><div class="row" style="align-items:flex-end;gap:28px"><div><div class="stat" data-pending-orders>${tot.preN}</div><div style="font-weight:700">${T('pendingReviewOrders')}</div></div><div><div class="stat" data-pending-pieces>${tot.pre}</div><div style="font-weight:700">${T('pendingReviewPieces')}</div></div></div></div><button class="btn" data-act="openPending">${T('reviewPending')}</button></div></div>`;
     const stats = [['prePieces', tot.pre], ['confPieces', tot.conf], ['delivered', tot.d], ['pending', tot.p]].map(([k, v]) => `<div class="card"><div class="stat">${v}</div><div class="muted">${T(k)}</div></div>`).join('');
-    const checks = st.map(({ p, pre, x }) => { const a = x.ordered, b = prodRows(p.id).reduce((q, r) => q + r.ordered, 0), c = D().groups.filter(g => g.period_id === p.id).reduce((q, g) => q + act(p.id).filter(l => l.group_id === g.id).reduce((z, l) => z + l.qty, 0), 0), d = x.delivered + x.pending, ok = a === b && b === c && c === d, waiting = a === 0 && pre > 0;
+    const bySchool = `<div class="card scroll"><h3 style="margin-bottom:10px">${T('bySchool')}</h3><table><thead><tr><th>${T('school')}</th><th class="num">${T('pendingPrePieces')}</th><th class="num">${T('confPieces')}</th><th class="num">${T('pendingShort')}</th></tr></thead><tbody>
+      ${st.map(({ p, pre, x }) => `<tr><td><b>${esc(D().sch[p.school_id].name)}</b><div class="muted">${rng(p)}</div></td><td class="num"><b data-pre-pieces>${pre}</b></td><td class="num">${x.ordered}</td><td class="num">${x.pending}</td></tr>`).join('')}</tbody></table></div>`;
+    return `${pendingCard}<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">${stats}</div>
+      <div class="row between"><div class="muted">${T('homeCountNote')}</div><button class="btn" data-act="openProdSum">${T('openProdSum')}</button></div>${bySchool}`;
+  }
+  function checksBlock() {
+    const checks = periodStats().map(({ p, pre, x }) => { const a = x.ordered, b = prodRows(p.id).reduce((q, r) => q + r.ordered, 0), c = D().groups.filter(g => g.period_id === p.id).reduce((q, g) => q + act(p.id).filter(l => l.group_id === g.id).reduce((z, l) => z + l.qty, 0), 0), d = x.delivered + x.pending, ok = a === b && b === c && c === d, waiting = a === 0 && pre > 0;
       return `<tr><td>${esc(pname(p))}</td><td class="num">${a}</td><td class="num">${b}</td><td class="num">${c}</td><td class="num">${d}</td><td><b style="color:${waiting ? '#8A5A00' : ok ? '#2E6B4A' : '#B3261E'}">${waiting ? T('preOnly') : ok ? T('okTxt') : T('badTxt')}</b></td></tr>`; }).join('');
-    return `${pendingCard}<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">${stats}</div>
-      <div class="row between"><div class="muted">${T('homeCountNote')}</div><button class="btn sm" data-act="openProdSum">${T('openProdSum')}</button></div>
-      <div class="card scroll"><h3 style="margin-bottom:10px">${T('nSchools')}</h3><table><thead><tr><th>${T('school')}</th><th>${T('orderPeriod')}</th><th>${T('status')}</th><th class="num">${T('pendingPrePieces')}</th><th class="num">${T('confPieces')}</th><th class="num">${T('delivered')}</th><th class="num">${T('pendingShort')}</th></tr></thead><tbody>
-      ${st.map(({ p, pre, x }) => `<tr><td>${esc(D().sch[p.school_id].name)}</td><td>${rng(p)}</td><td>${stl(p)}</td><td class="num"><b data-pre-pieces>${pre}</b></td><td class="num">${x.ordered}</td><td class="num">${x.delivered}</td><td class="num">${x.pending}</td></tr>`).join('')}</tbody></table></div>
-      <div class="card scroll"><h3>${T('checks')}</h3><div class="muted" style="margin-bottom:10px">${T('checksNote')}</div><table><thead><tr><th>${T('orderPeriod')}</th><th class="num">${T('cOrders')}</th><th class="num">${T('cProd')}</th><th class="num">${T('cPack')}</th><th class="num">${T('cDel')}</th><th></th></tr></thead><tbody>${checks}</tbody></table></div>`;
+    return `<div class="card scroll" id="checks"><h3>${T('checks')}</h3><div class="muted" style="margin-bottom:10px">${T('checksNote')}</div><table><thead><tr><th>${T('orderPeriod')}</th><th class="num">${T('cOrders')}</th><th class="num">${T('cProd')}</th><th class="num">${T('cPack')}</th><th class="num">${T('cDel')}</th><th></th></tr></thead><tbody>${checks}</tbody></table></div>`;
   }
   function vSchools() {
     const sf = A.schoolForm, f = A.f;
@@ -252,9 +257,13 @@
     const sigs = {}; D().orders.filter(o => o.status === 'active').forEach(o => { const k = sig(o); sigs[k] = (sigs[k] || 0) + 1; });
     const rows = D().orders.filter(o => ids.includes(o.period_id) && (status === 'all' || o.status === status) && (g === 'all' || D().lines.some(l => l.order_id === o.id && l.group_id === g))).sort((a, b) => b.created_at.localeCompare(a.created_at));
     const gopts = [{ v: 'all', l: T('fAll') }, ...fPeriods().flatMap(p => D().groups.filter(x => x.period_id === p.id).map(x => ({ v: x.id, l: (fPeriods().length > 1 ? rng(p) + ' · ' : '') + gl(x) })))];
-    const sopts = [{ v: 'all', l: T('fAll') }, { v: 'preorder', l: T('filterPreorder') }, { v: 'active', l: T('filterActive') }, { v: 'cancelled', l: T('stCancelled') }];
-    return `<div class="card col"><div class="row between"><h3>${T('nOrders')} (${rows.length})</h3><div class="row" style="flex:1;justify-content:flex-end"><label style="min-width:200px">${T('status')}<select data-k="o_status" data-re>${opts(sopts, status)}</select></label><label style="min-width:220px">${T('teacher')}<select data-k="o_group" data-re>${opts(gopts, g)}</select></label></div></div><div class="scroll"><table><thead><tr><th>#</th><th>${T('registeredAt')}</th><th>${T('registeredBy')}</th><th>${T('orderPeriod')}</th><th class="num">${T('ordered')}</th><th>${T('status')}</th><th></th></tr></thead><tbody>
-      ${rows.map(o => `<tr><td><b>${esc(o.number)}</b></td><td>${fdt(o.created_at)}</td><td>${esc(o.registrant_name)}<div class="muted">${esc(o.registrant_contact)}</div></td><td>${esc(pname(D().per[o.period_id]))}</td><td class="num">${D().lines.filter(l => l.order_id === o.id).reduce((a, l) => a + l.qty, 0)}</td><td>${T(o.status === 'preorder' ? 'stPreorder' : o.status === 'active' ? 'stActive' : 'stCancelled')}${o.status === 'active' && sigs[sig(o)] > 1 ? `<div class="err">${T('dupFlag')}</div>` : ''}</td><td><button class="btn sec sm" data-act="openOrder" data-id="${o.id}">${T('detail')}</button></td></tr>`).join('')}</tbody></table></div></div>${orderDetail()}`;
+    return `<div class="card col"><div class="row between" style="align-items:flex-end"><h3>${T('tabOrders')} (${rows.length})</h3><label style="flex:0 1 260px;min-width:180px">${T('teacher')}<select data-k="o_group" data-re>${opts(gopts, g)}</select></label></div><div class="scroll"><table><thead><tr><th>#</th><th>${T('registeredAt')}</th><th>${T('registeredBy')}</th><th>${T('orderPeriod')}</th><th class="num">${T('ordered')}</th><th>${T('status')}</th><th></th></tr></thead><tbody>
+      ${rows.map(o => `<tr><td><b>${esc(o.number)}</b></td><td>${fdt(o.created_at)}</td><td>${esc(o.registrant_name)}<div class="muted">${esc(o.registrant_contact)}</div></td><td>${esc(pname(D().per[o.period_id]))}</td><td class="num">${D().lines.filter(l => l.order_id === o.id).reduce((a, l) => a + l.qty, 0)}</td><td>${T(o.status === 'preorder' ? 'stPreorder' : o.status === 'active' ? 'stActive' : 'stCancelled')}${o.status === 'active' && sigs[sig(o)] > 1 ? `<div class="err">${T('dupFlag')}</div>` : ''}</td><td><button class="btn sec" data-act="openOrder" data-id="${o.id}">${T('viewOrder')}</button></td></tr>`).join('')}</tbody></table></div></div>${orderDetail()}`;
+  }
+  function vPedidos() {
+    const status = A.f.o_status || 'all';
+    const filters = [['preorder', 'filterPreorder'], ['active', 'filterConfirmed'], ['delivered', 'filterDelivered'], ['all', 'filterAllOrders']].map(([v, k]) => `<button type="button" class="btn ${status === v ? '' : 'sec'}" data-act="setOrderFilter" data-v="${v}">${T(k)}</button>`).join('');
+    return summaryHead() + `<div class="row" id="order-filters">${filters}</div><div id="order-list">${status === 'delivered' ? vDeliveries() : vOrders()}</div>`;
   }
   function orderDetail() {
     const o = A.orderSel && D().ord[A.orderSel]; if (!o) return '';
@@ -272,7 +281,7 @@
     return `<div class="card col" style="border-color:var(--deep-blue)"><div class="row between"><div><div class="eyebrow">${T('detail')}</div><h2>${esc(o.number)}</h2></div><button class="lk" data-act="closeOrder">${T('close2')} ✕</button></div>
       <div class="grid"><div><div class="muted">${T('registeredBy')}</div><b>${esc(o.registrant_name)}</b> · ${T({ coord: 'roleCoord', teacher: 'roleTeacher', rep: 'roleRep' }[o.registrant_role])}<div class="muted">${esc(o.registrant_contact)}</div></div><div><div class="muted">${T('registeredAt')}</div><b>${fdt(o.created_at)}</b></div><div><div class="muted">${T('orderPeriod')}</div><b>${esc(pname(p))}</b></div><div><div class="muted">${T('status')}</div><b>${T(o.status === 'preorder' ? 'stPreorder' : o.status === 'active' ? 'stActive' : 'stCancelled')}</b>${editable ? '' : `<div class="err">${T('cancelledInfo')} ${esc(o.cancel_reason)}</div>`}</div></div>
       <div class="scroll"><table><thead><tr><th>${T('teacher')}</th><th>${T('product')}</th><th>${T('color')}</th><th>${T('size')}</th><th class="num">${T('qty')}</th><th class="num">${T('delivered2')}</th><th>${T('pers')}</th></tr></thead><tbody>
-      ${ls.map(l => `<tr><td>${esc(D().grp[l.group_id].teacher)}</td><td>${esc(dsc(l))}</td><td>${esc(loc(l.color_name))}</td><td>${esc(szl(l))}</td><td class="num">${l.qty}</td><td class="num">${delq(l.id)}</td><td><b>${l.personalization ? '“' + esc(l.personalization) + '”' : ''}</b></td></tr>`).join('')}</tbody></table></div>${corr}${o.status === 'preorder' ? `<button class="btn" data-act="confirmPreorder" data-id="${o.id}">${T('confirmPreorder')}</button>` : ''}
+      ${ls.map(l => `<tr><td>${esc(D().grp[l.group_id] ? D().grp[l.group_id].teacher : '')}</td><td>${esc(dsc(l))}</td><td>${esc(loc(l.color_name))}</td><td>${esc(szl(l))}</td><td class="num">${l.qty}</td><td class="num">${delq(l.id)}</td><td><b>${l.personalization ? '“' + esc(l.personalization) + '”' : ''}</b></td></tr>`).join('')}</tbody></table></div>${corr}${o.status === 'preorder' ? `<button class="btn" data-act="confirmPreorder" data-id="${o.id}">${T('confirmPreorder')}</button>` : ''}
       <h3>${T('history')}</h3><table><thead><tr><th>${T('registeredAt')}</th><th>${T('by')}</th><th>${T('action')}</th><th>${T('detail')}</th></tr></thead><tbody>${D().hist.filter(h => h.order_id === o.id).sort((a, b) => a.at.localeCompare(b.at)).map(h => `<tr><td>${fdt(h.at)}</td><td>${esc(h.by_email || '')}</td><td>${T('a_' + h.action)}</td><td>${esc(h.detail)}</td></tr>`).join('')}</tbody></table></div>`;
   }
   function vProduction() {
@@ -416,17 +425,19 @@
   }
   function vReports() {
     const ps = fPeriods(), gopts = [{ v: 'all', l: T('fAll') }, ...(ps.length === 1 ? D().groups.filter(g => g.period_id === ps[0].id).map(g => ({ v: g.id, l: gl(g) })) : [])];
+    const preparing = A.rType === 'prepare';
     const extra = A.rType === 'prodsum' ? `<label>${T('prodStatus')}<select data-s="rStatus" data-re>${opts([{ v: 'all', l: T('sumAll') }, { v: 'preorder', l: T('sumPreorder') }, { v: 'active', l: T('sumActive') }], A.rStatus || 'all')}</select></label>
       <label style="flex-direction:row;align-items:center;gap:10px;min-height:44px;grid-column:1 / -1"><input type="checkbox" data-s="rByGroup" data-re ${A.rByGroup ? 'checked' : ''}/> <span>${T('byGroup')}</span></label>` : '';
-    return `<div class="no-print card col"><div class="grid"><label>${T('reportType')}<select data-s="rType" data-re>${opts(['prodsum', 'preorders', 'prep', 'individual', 'delivery', 'production'].map(k => ({ v: k, l: T('r_' + k) })), A.rType)}</select></label>
+    const tools = preparing ? `<p class="muted" style="margin:0">${T('prepareHint')}</p>` : `<div class="row"><button class="btn" data-act="print">${T('print')}</button>${A.rType === 'prodsum' ? `<button class="btn sec" data-act="csvProd">${T('downloadCsv')}</button>` : ''}<span class="muted">${A.rType === 'prodsum' ? T('prodSumPrint') : T('printNote')}</span></div>`;
+    return `<div class="no-print card col"><div class="grid"><label>${T('reportType')}<select data-s="rType" data-re>${opts(['prodsum', 'prepare', 'preorders', 'prep', 'individual', 'delivery', 'production'].map(k => ({ v: k, l: T('r_' + k) })), A.rType)}</select></label>
       <label>${T('teacher')}<select data-s="rGroup" data-re>${opts(gopts, A.rGroup)}</select></label><label>${T('reportLang')}<select data-s="rLang" data-re>${opts([{ v: 'es', l: 'Español' }, { v: 'en', l: 'English' }], A.rLang)}</select></label>
       <label>${T('paper')}<select data-s="rPaper" data-re>${opts([{ v: 'letter', l: T('letterOpt') }, { v: 'a4', l: 'A4' }], A.rPaper)}</select></label>${extra}</div>
       ${A.rType === 'prodsum' ? `<p class="muted" style="margin:0">${T('reportLand')}</p>` : ''}${A.rType === 'production' ? `<p class="warn" style="margin:0">${T('prepOnly')}</p>` : ''}
-      <div class="row"><button class="btn" data-act="print">${T('print')}</button>${A.rType === 'prodsum' ? `<button class="btn sec" data-act="csvProd">${T('downloadCsv')}</button>` : ''}<span class="muted">${A.rType === 'prodsum' ? T('prodSumPrint') : T('printNote')}</span></div></div>${sheets()}`;
+      ${tools}</div>${preparing ? vProduction() : sheets()}<div class="no-print">${checksBlock()}</div>`;
   }
 
   // ---- armado ----
-  const VIEWS = [['schools', 'nSchools', vSchools], ['orders', 'nOrders', vOrders], ['summary', 'nSummary', vSummary], ['production', 'nProduction', vProduction], ['deliveries', 'nDeliveries', vDeliveries], ['reports', 'nReports', vReports]];
+  const VIEWS = [['schools', 'tabSchools', vSchools], ['orders', 'tabOrders', vPedidos], ['reports', 'tabReports', vReports]];
   const langBtns = () => ['es', 'en'].map(l => `<button class="lang ${JK.lang === l ? 'on' : ''}" data-act="lang" data-v="${l}">${l.toUpperCase()}</button>`).join('');
   function render() {
     document.documentElement.lang = JK.lang;
@@ -480,7 +491,8 @@
     lang: el => { JK.setLang(el.dataset.v); A.rLang = el.dataset.v; render(); },
     nav: el => { A.view = el.dataset.v; render(); },
     openProdSum: () => { A.view = 'reports'; A.rType = 'prodsum'; A.rStatus = A.rStatus || 'all'; render(); },
-    openPending: () => { A.view = 'orders'; A.f.o_status = 'preorder'; A.orderSel = null; render(); },
+    openPending: () => { A.view = 'orders'; A.f.o_status = 'preorder'; A.orderSel = null; render(); const el = document.getElementById('order-list'); if (el) el.scrollIntoView({ block: 'start' }); },
+    setOrderFilter: el => { A.f.o_status = el.dataset.v; A.orderSel = null; render(); const box = document.getElementById('order-list'); if (box) box.scrollIntoView({ block: 'start' }); },
     reload: () => loadAll(), print: () => window.print(),
     csvProd: () => {
       const blob = new Blob(['\uFEFF' + prodCsv()], { type: 'text/csv;charset=utf-8' });
