@@ -30,12 +30,28 @@
   }
 
   async function load() {
-    if (!JK.configured()) S.fatal = T('eConfig');
-    else if (slug === retiredTestSlug) S.fatal = JK.lang === 'es' ? 'El espacio de pruebas ha sido retirado. Usa el enlace oficial para registrar pedidos.' : 'The test space has been retired. Use the official link to place orders.';
-    else if (!slug) { const { data, error } = await JK.sb().rpc('public_list_schools'); if (error) S.fatal = T('eServer'); else S.schools = (data || []).filter(p => p.slug !== retiredTestSlug); }
-    else {
-      const { data, error } = await JK.sb().rpc('public_get_period', { p_slug: slug });
-      if (error) S.fatal = T('eServer'); else if (!data) S.fatal = T('eLink'); else S.data = { ...data, groups: groupsForNewOrders(data) };
+    try {
+      if (!JK.configured()) S.fatal = T('eConfig');
+      else if (slug === retiredTestSlug) S.fatal = JK.lang === 'es' ? 'El espacio de pruebas ha sido retirado. Usa el enlace oficial para registrar pedidos.' : 'The test space has been retired. Use the official link to place orders.';
+      else if (!slug) {
+        const { data, error } = await JK.sb().rpc('public_list_schools');
+        if (error) S.fatal = T('eServer');
+        else {
+          const schools = (Array.isArray(data) ? data : []).filter(p => p && p.slug !== retiredTestSlug);
+          const open = schools.filter(p => p.state === 'open');
+          // El iframe de Systeme.io no lleva ?p=. Con un solo colegio abierto, ese es el formulario.
+          if (schools.length === 1 && open.length === 1) slug = open[0].slug;
+          else S.schools = schools;
+        }
+      }
+      if (!S.fatal && slug && !S.data) {
+        const { data, error } = await JK.sb().rpc('public_get_period', { p_slug: slug });
+        if (error) S.fatal = T('eServer');
+        else if (!data) S.fatal = T('eLink');
+        else S.data = { ...data, groups: groupsForNewOrders(data) };
+      }
+    } catch (e) {
+      S.fatal = T('eServer');
     }
     render();
   }
