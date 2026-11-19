@@ -2,8 +2,8 @@
 (function () {
   const { T, esc, money, loc, fd, fdt, szl, dsc } = JK;
   const root = document.getElementById('app');
-  const A = { user: null, ok: false, msg: '', D: null, loading: false, view: 'summary', fSchool: 'all', fPeriod: 'all', orderSel: null, delSel: null, cfg: null, newFor: null, schoolForm: null,
-    toast: '', rType: 'production', rGroup: 'all', rLang: JK.lang, rPaper: 'letter', rStatus: 'all', rByGroup: false, gate: '', recovery: false, showPass: false, sending: false, authReady: false, f: {}, pq: {}, eq: {}, dq: {}, pf: {}, zoom: '' };
+  const A = { user: null, ok: false, msg: '', D: null, loading: false, view: 'reports', fSchool: 'all', fPeriod: 'all', orderSel: null, delSel: null, cfg: null, newFor: null, schoolForm: null, editProd: null,
+    toast: '', rType: 'prodsum', rGroup: 'all', rLang: JK.lang, rPaper: 'letter', rStatus: 'all', rByGroup: false, gate: '', recovery: false, showPass: false, sending: false, authReady: false, f: {}, pq: {}, eq: {}, dq: {}, pf: {}, zoom: '' };
   const sb = () => JK.sb();
   const recoveryFromHash = () => { const raw = (location.hash || '').replace(/^#/, ''); return !!raw && new URLSearchParams(raw).get('type') === 'recovery'; };
   const markRecovery = () => { A.recovery = true; try { sessionStorage.setItem('jk_pw_recovery', '1'); } catch (e) {} };
@@ -15,7 +15,11 @@
   const rng = (p, l) => fd(p.open_date, l) + ' – ' + fd(p.close_date, l);
   const opts = (arr, sel) => arr.map(o => `<option value="${esc(o.v)}" ${String(o.v) === String(sel) ? 'selected' : ''}>${esc(o.l)}</option>`).join('');
   const toast = m => { A.toast = m; render(); clearTimeout(toast.t); toast.t = setTimeout(() => { A.toast = ''; render(); }, 6000); };
-  const errMsg = e => { const m = (e && e.message) || String(e); const code = (m.match(/[a-z_]+$/) || [''])[0]; const k = 'x_' + code; return window.JK_DICT[k] ? T(k) : m; };
+  const errMsg = e => {
+    const m = (e && e.message) || String(e);
+    if (/schema cache|could not find the function|PGRST202/i.test(m)) return T('x_needSql');
+    const code = (m.match(/[a-z_]+$/) || [''])[0]; const k = 'x_' + code; return window.JK_DICT[k] ? T(k) : m;
+  };
 
   async function all(table, order = 'id') {
     let out = [], from = 0;
@@ -65,6 +69,45 @@
   const badge = (k) => `<span class="badge ${tone(k)}">${T('st_' + k)}</span>`;
   const slug = s => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'x';
   const csv = s => (s || '').split(',').map(x => x.trim()).filter(Boolean);
+  const SWATCH = ['#1d1d1f', '#6b1f2e', '#274969', '#4a4f52', '#1c2a4a', '#8A5A00', '#2E6B4A', '#9A4A3C'];
+  function pieceQty(pid, status) {
+    return D().lines.reduce((a, l) => {
+      if (l.period_id !== pid) return a;
+      const o = D().ord[l.order_id];
+      return o && o.status === status ? a + l.qty : a;
+    }, 0);
+  }
+  function parseGroupLines(text) {
+    return (text || '').split('\n').map(line => {
+      const parts = line.split('|').map(s => s.trim());
+      return parts[0] ? { teacher: parts[0], grade: parts[1] || '', room: parts[2] || '' } : null;
+    }).filter(Boolean);
+  }
+  function parseColors(text, existing) {
+    const prev = {};
+    ((existing && existing.colors) || []).forEach(c => { prev[c.id] = c; });
+    return csv(text).map((raw, i) => {
+      const bits = raw.split('/').map(s => s.trim()).filter(Boolean);
+      const esN = bits[0], enN = bits[1] || bits[0], id = slug(enN || esN), old = prev[id] || {};
+      return { id, es: esN, en: enN, sw: old.sw || SWATCH[i % SWATCH.length], photo: old.photo || '', flag: !!old.flag };
+    });
+  }
+  function parseModels(f) {
+    const out = [];
+    const push = (code, esN, enN) => {
+      const c = (code || '').trim();
+      if (!c) return;
+      const id = slug(c);
+      if (out.some(m => m.id === id)) return;
+      out.push({ id, code: c, label: { es: (esN || c).trim(), en: (enN || esN || c).trim() } });
+    };
+    push(f.pr_code, f.pr_mes, f.pr_men);
+    (f.pr_more || '').split('\n').forEach(line => { const p = line.split('|').map(s => s.trim()); if (p[0]) push(p[0], p[1], p[2]); });
+    return out;
+  }
+  function blankGarment() {
+    Object.assign(A.f, { pr_es: '', pr_en: '', pr_cat: 'school', pr_colors: '', pr_child: '', pr_adult: '', pr_price: '', pr_design: '', pr_pers: 'none', pr_photo: '', pr_code: '', pr_mes: '', pr_men: '', pr_more: '', pr_map: '' });
+  }
   const publicUrl = p => new URL('index.html', location.href).href + '?p=' + p.slug;
 
   // ---- validaciones previas a abrir (el servidor las repite) ----
@@ -82,22 +125,27 @@
       <label style="flex:1 1 240px">${T('orderPeriod')}<select data-s="fPeriod" data-re>${opts([{ v: 'all', l: T('fAll') }, ...ps.map(p => ({ v: p.id, l: (A.fSchool === 'all' ? D().sch[p.school_id].name + ' · ' : '') + rng(p) }))], A.fPeriod)}</select></label></div>`;
   }
   function vSummary() {
-    const st = fPeriods().map(p => ({ p, x: stat(p) })), tot = { o: 0, d: 0, p: 0, n: 0 }; st.forEach(({ x }) => { tot.o += x.ordered; tot.d += x.delivered; tot.p += x.pending; tot.n += x.orders; });
-    const stats = [['ordered', tot.o], ['delivered', tot.d], ['pending', tot.p]].map(([k, v]) => `<div class="card"><div class="stat">${v}</div><div class="muted">${T(k)}</div></div>`).join('');
-    const checks = st.map(({ p, x }) => { const a = x.ordered, b = prodRows(p.id).reduce((q, r) => q + r.ordered, 0), c = D().groups.filter(g => g.period_id === p.id).reduce((q, g) => q + act(p.id).filter(l => l.group_id === g.id).reduce((z, l) => z + l.qty, 0), 0), d = x.delivered + x.pending, ok = a === b && b === c && c === d;
-      return `<tr><td>${esc(pname(p))}</td><td class="num">${a}</td><td class="num">${b}</td><td class="num">${c}</td><td class="num">${d}</td><td><b style="color:${ok ? '#2E6B4A' : '#B3261E'}">${ok ? T('okTxt') : T('badTxt')}</b></td></tr>`; }).join('');
-    return `<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">${stats}</div><div class="muted">${T('receivedPending')}: <b>${D().orders.filter(o => fPeriods().some(p => p.id === o.period_id) && o.status === 'preorder').length}</b> · ${T('ordersN')}: <b>${tot.n}</b> · ${T('sumNote')}</div>
-      <div class="card scroll"><h3 style="margin-bottom:10px">${T('nSchools')}</h3><table><thead><tr><th>${T('school')}</th><th>${T('orderPeriod')}</th><th>${T('status')}</th><th class="num">${T('ordered')}</th><th class="num">${T('delivered')}</th><th class="num">${T('pendingShort')}</th><th>${T('stProd')}</th><th>${T('stDel')}</th></tr></thead><tbody>
-      ${st.map(({ p, x }) => `<tr><td>${esc(D().sch[p.school_id].name)}</td><td>${rng(p)}</td><td>${stl(p)}</td><td class="num">${x.ordered}</td><td class="num">${x.delivered}</td><td class="num">${x.pending}</td><td>${badge(x.prd)}</td><td>${badge(x.del)}</td></tr>`).join('')}</tbody></table></div>
+    const st = fPeriods().map(p => ({ p, pre: pieceQty(p.id, 'preorder'), x: stat(p) }));
+    const tot = { pre: 0, conf: 0, d: 0, p: 0 }; st.forEach(({ pre, x }) => { tot.pre += pre; tot.conf += x.ordered; tot.d += x.delivered; tot.p += x.pending; });
+    const stats = [['prePieces', tot.pre], ['confPieces', tot.conf], ['delivered', tot.d], ['pending', tot.p]].map(([k, v]) => `<div class="card"><div class="stat">${v}</div><div class="muted">${T(k)}</div></div>`).join('');
+    const checks = st.map(({ p, pre, x }) => { const a = x.ordered, b = prodRows(p.id).reduce((q, r) => q + r.ordered, 0), c = D().groups.filter(g => g.period_id === p.id).reduce((q, g) => q + act(p.id).filter(l => l.group_id === g.id).reduce((z, l) => z + l.qty, 0), 0), d = x.delivered + x.pending, ok = a === b && b === c && c === d, waiting = a === 0 && pre > 0;
+      return `<tr><td>${esc(pname(p))}</td><td class="num">${a}</td><td class="num">${b}</td><td class="num">${c}</td><td class="num">${d}</td><td><b style="color:${waiting ? '#8A5A00' : ok ? '#2E6B4A' : '#B3261E'}">${waiting ? T('preOnly') : ok ? T('okTxt') : T('badTxt')}</b></td></tr>`; }).join('');
+    return `<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">${stats}</div>
+      <div class="row between"><div class="muted">${T('homeCountNote')}</div><button class="btn sm" data-act="openProdSum">${T('openProdSum')}</button></div>
+      <div class="card scroll"><h3 style="margin-bottom:10px">${T('nSchools')}</h3><table><thead><tr><th>${T('school')}</th><th>${T('orderPeriod')}</th><th>${T('status')}</th><th class="num">${T('prePieces')}</th><th class="num">${T('confPieces')}</th><th class="num">${T('delivered')}</th><th class="num">${T('pendingShort')}</th></tr></thead><tbody>
+      ${st.map(({ p, pre, x }) => `<tr><td>${esc(D().sch[p.school_id].name)}</td><td>${rng(p)}</td><td>${stl(p)}</td><td class="num"><b>${pre}</b></td><td class="num">${x.ordered}</td><td class="num">${x.delivered}</td><td class="num">${x.pending}</td></tr>`).join('')}</tbody></table></div>
       <div class="card scroll"><h3>${T('checks')}</h3><div class="muted" style="margin-bottom:10px">${T('checksNote')}</div><table><thead><tr><th>${T('orderPeriod')}</th><th class="num">${T('cOrders')}</th><th class="num">${T('cProd')}</th><th class="num">${T('cPack')}</th><th class="num">${T('cDel')}</th><th></th></tr></thead><tbody>${checks}</tbody></table></div>`;
   }
   function vSchools() {
     const sf = A.schoolForm, f = A.f;
-    const form = sf ? `<div style="border:1px solid var(--line);border-radius:12px;padding:16px;background:var(--paper)" class="col"><h3>${sf === 'new' ? T('addSchool') : T('editSchool')}</h3>
+    const fresh = sf === 'new' ? `<h3>${T('schoolDates')}</h3><div class="grid"><label>${T('openFrom')}<input type="date" data-k="sc_open" value="${esc(f.sc_open)}"/></label><label>${T('openUntil')}<input type="date" data-k="sc_close" value="${esc(f.sc_close)}"/></label>
+        <label>${T('mode')}<select data-k="sc_mode">${opts([{ v: 'coord', l: T('mCoord') }, { v: 'each', l: T('mEach') }, { v: 'mixed', l: T('mMixed') }], f.sc_mode || 'mixed')}</select></label></div>
+        <label>${T('groupLines')}<textarea data-k="sc_groups_text" rows="4" placeholder="Anciso | KN&#10;Bessolo | KN">${esc(f.sc_groups_text || '')}</textarea></label><div class="muted">${T('groupHint')}</div>` : '';
+    const form = sf ? `<div style="border:1px solid var(--line);border-radius:12px;padding:16px;background:var(--paper)" class="col"><h3>${sf === 'new' ? T('addSchool') : T('editSchool')}</h3><div class="muted">${sf === 'new' ? T('schoolSetup') : ''}</div>
       <div class="grid"><label>${T('name')}<input data-k="sc_name" value="${esc(f.sc_name)}"/></label><label>${T('collector')}<input data-k="sc_collector" value="${esc(f.sc_collector)}"/></label><label>${T('contactData')}<input data-k="sc_contact" value="${esc(f.sc_contact)}"/></label><label>${T('logoFile')}<input data-k="sc_logo" value="${esc(f.sc_logo)}" placeholder="assets/img/school-harder.png"/></label></div>
-      <div class="muted">${T('logoSlot')}</div><div class="row"><button class="btn" data-act="saveSchool">${T('save')}</button><button class="btn ghost" data-act="cancelSchool">${T('cancel')}</button></div></div>` : '';
-    const schools = `<div class="card col"><div class="row between"><h2>${T('nSchoolsOnly')}</h2><button class="btn sm" data-act="newSchool">+ ${T('addSchool')}</button></div><div class="scroll"><table><thead><tr><th>${T('name')}</th><th>${T('collector')}</th><th>${T('contactData')}</th><th></th></tr></thead><tbody>
-      ${D().schools.map(s => `<tr><td><b>${esc(s.name)}</b></td><td>${esc(s.collector)}</td><td>${esc(s.contact)}</td><td><button class="btn ghost sm" data-act="editSchool" data-id="${s.id}">${T('edit')}</button></td></tr>`).join('')}</tbody></table></div>${form}</div>`;
+      <div class="muted">${T('logoSlot')}</div>${fresh}<div class="row"><button class="btn" data-act="saveSchool">${T('save')}</button><button class="btn ghost" data-act="cancelSchool">${T('cancel')}</button></div></div>` : '';
+    const schools = `<div class="card col"><div class="row between"><h2>${T('nSchoolsOnly')}</h2><button class="btn" data-act="newSchool">+ ${T('addSchool')}</button></div>${form}<div class="scroll"><table><thead><tr><th>${T('name')}</th><th>${T('collector')}</th><th>${T('contactData')}</th><th></th></tr></thead><tbody>
+      ${D().schools.map(s => `<tr><td><b>${esc(s.name)}</b></td><td>${esc(s.collector)}</td><td>${esc(s.contact)}</td><td><button class="btn ghost sm" data-act="editSchool" data-id="${s.id}">${T('edit')}</button></td></tr>`).join('')}</tbody></table></div></div>`;
     const blocks = D().schools.filter(s => A.fSchool === 'all' || s.id === A.fSchool).map(s => {
       const nf = A.newFor === s.id ? `<div style="border:1px solid var(--line);border-radius:12px;padding:16px;background:var(--paper)" class="col"><h3>${T('newPeriod')}</h3><div class="grid"><label>${T('openFrom')}<input type="date" data-k="np_open" value="${esc(f.np_open)}"/></label><label>${T('openUntil')}<input type="date" data-k="np_close" value="${esc(f.np_close)}"/></label>
         <label>${T('mode')}<select data-k="np_mode">${opts([{ v: 'coord', l: T('mCoord') }, { v: 'each', l: T('mEach') }, { v: 'mixed', l: T('mMixed') }], f.np_mode || 'mixed')}</select></label></div><div class="muted">${T('copyNote')}</div>
@@ -105,7 +153,7 @@
       return `<div class="card col"><div class="row between"><h2>${esc(s.name)}</h2><button class="btn sm" data-act="newPeriod" data-id="${s.id}">+ ${T('newPeriod')}</button></div>${nf}<div class="scroll"><table><thead><tr><th>${T('dates')}</th><th>${T('mode')}</th><th>${T('status')}</th><th>${T('publicLink')}</th><th></th></tr></thead><tbody>
         ${D().periods.filter(p => p.school_id === s.id).map(p => `<tr><td><b>${rng(p)}</b></td><td>${T(p.mode === 'mixed' ? 'mMixed' : p.mode === 'coord' ? 'mCoord' : 'mEach')}</td>
         <td><div class="row" style="gap:8px"><select data-act="setStatus" data-id="${p.id}" style="width:200px">${opts([{ v: 'pending', l: T('stPending') }, { v: 'open', l: T('stOpen') }, { v: 'closed', l: T('stClosed') }], p.status)}</select><span class="muted">${stl(p)}</span></div></td>
-        <td><button class="lk" data-act="copyLink" data-id="${p.id}">${T('copyLink')}</button></td><td><button class="btn sec sm" data-act="cfg" data-id="${p.id}">${T('configure')}</button></td></tr>`).join('')}</tbody></table></div></div>`;
+        <td><button class="lk" data-act="copyLink" data-id="${p.id}">${T('copyLink')}</button><div class="muted">?p=${esc(p.slug)}</div></td><td><button class="btn sec sm" data-act="cfg" data-id="${p.id}">${T('configure')}</button></td></tr>`).join('')}</tbody></table></div></div>`;
     }).join('');
     return schools + blocks + cfgPanel();
   }
@@ -114,7 +162,7 @@
     const v = validate(p), f = A.f, gs = D().groups.filter(g => g.period_id === p.id), ps = D().products.filter(x => x.period_id === p.id).sort((a, b) => a.sort - b.sort), log = D().logs.filter(x => x.period_id === p.id);
     const pfv = (x, k, d) => (A.pf[x.id] && A.pf[x.id][k] !== undefined) ? A.pf[x.id][k] : d;
     const prodRowsH = ps.map(x => { const map = Object.entries(x.price_map || {}).map(([k, v2]) => k + ':' + v2).join(', ');
-      return `<tr><td style="width:60px">${x.photo ? `<img class="thumb" src="${esc(x.photo)}" alt=""/>` : ''}</td><td><b>${esc(loc(x.name))}</b><div class="muted">${T(x.category === 'school' ? 'catSchool' : 'catStaff')} ${esc(x.models.map(m => m.code).join(' / '))}</div>${x.sizes_pending ? `<div class="warn">${T('sizesTbd')}</div>` : x.pending_sizes.length ? `<div class="warn">${T('wSizes').replace('{n}', x.pending_sizes.join('/'))}</div>` : ''}</td>
+      return `<tr><td style="width:60px">${x.photo ? `<img class="thumb" src="${esc(x.photo)}" alt=""/>` : ''}</td><td><b>${esc(loc(x.name))}</b><div class="muted">${T(x.category === 'school' ? 'catSchool' : 'catStaff')} ${esc((x.models || []).map(m => m.code).join(' / '))}</div>${x.sizes_pending ? `<div class="warn">${T('sizesTbd')}</div>` : (x.pending_sizes || []).length ? `<div class="warn">${T('wSizes').replace('{n}', x.pending_sizes.join('/'))}</div>` : ''}<button class="btn ghost sm" data-act="editGarment" data-id="${x.id}">${T('editGarment')}</button></td>
       <td style="font-size:13px">${esc(x.colors.map(c => loc(c)).join(', '))}<div style="margin-top:6px;grid-template-columns:1fr 1fr" class="grid"><label>${T('youth')}<input data-m="pf" data-k="${x.id}:child" value="${esc(pfv(x, 'child', (x.sizes.child || []).join(', ')))}"/></label><label>${T('adultW')}<input data-m="pf" data-k="${x.id}:adult" value="${esc(pfv(x, 'adult', (x.sizes.adult || []).join(', ')))}"/></label></div></td>
       <td><div class="col" style="gap:6px"><label>${T('refPrice')}<input class="sm" data-m="pf" data-k="${x.id}:price" value="${esc(pfv(x, 'price', x.base_price == null ? '' : x.base_price))}" inputmode="decimal"/></label><label>${T('priceMapLbl')}<input data-m="pf" data-k="${x.id}:map" value="${esc(pfv(x, 'map', map))}" placeholder="2XL:14, 3XL:16"/></label><button class="btn sec sm" data-act="saveProduct" data-id="${x.id}">${T('save')}</button></div></td>
       <td><input type="checkbox" data-act="toggleProduct" data-id="${x.id}" ${x.enabled ? 'checked' : ''}/></td></tr>`; }).join('');
@@ -126,13 +174,20 @@
       <h3>${T('groups')}</h3><div class="scroll"><table><thead><tr><th>${T('teacher')}</th><th>${T('grade')}</th><th>${T('room')}</th><th></th></tr></thead><tbody>${gs.map(g => `<tr><td>${esc(g.teacher)}</td><td>${esc(g.grade) || '—'}</td><td>${esc(g.room) || '—'}</td><td><button class="lk" data-act="delGroup" data-id="${g.id}">${T('remove')}</button></td></tr>`).join('')}</tbody></table></div>
       <div class="grid"><label>${T('teacher')}<input data-k="gr_teacher" value="${esc(f.gr_teacher)}"/></label><label>${T('grade')}<input data-k="gr_grade" value="${esc(f.gr_grade)}"/></label><label>${T('room')}<input data-k="gr_room" value="${esc(f.gr_room)}"/></label></div><div class="row"><button class="btn sec sm" data-act="addGroup">+ ${T('addGroup')}</button></div>
       <h3>${T('catalog')}</h3><div class="scroll"><table><thead><tr><th></th><th>${T('product')}</th><th>${T('catVariants')}</th><th>${T('refPrice')}</th><th>${T('available')}</th></tr></thead><tbody>${prodRowsH}</tbody></table></div><div class="muted">${T('priceNote')}</div>
-      <div style="border:1px solid var(--line);border-radius:12px;padding:16px;background:var(--paper)" class="col"><h3>${T('addProduct')}</h3><div class="grid">
+      ${garmentForm(f)}</div>`;
+  }
+  function garmentForm(f) {
+    const editing = !!A.editProd;
+    return `<div id="garment-form" style="border:1px solid var(--line);border-radius:12px;padding:16px;background:var(--paper)" class="col"><h3>${editing ? T('editGarment') : T('addProduct')}</h3><div class="grid">
         <label>${T('nameEs')}<input data-k="pr_es" value="${esc(f.pr_es)}"/></label><label>${T('nameEn')}<input data-k="pr_en" value="${esc(f.pr_en)}"/></label>
         <label>${T('category')}<select data-k="pr_cat">${opts([{ v: 'school', l: T('catSchool') }, { v: 'staff', l: T('catStaff') }], f.pr_cat || 'school')}</select></label>
-        <label>${T('colorsCsv')}<input data-k="pr_colors" value="${esc(f.pr_colors)}"/></label><label>${T('childCsv')}<input data-k="pr_child" value="${esc(f.pr_child)}"/></label><label>${T('adultCsv')}<input data-k="pr_adult" value="${esc(f.pr_adult)}"/></label>
-        <label>${T('refPrice')}<input data-k="pr_price" value="${esc(f.pr_price)}" inputmode="decimal"/></label><label>${T('design')}<input data-k="pr_design" value="${esc(f.pr_design)}"/></label>
+        <label>${T('modelCode')}<input data-k="pr_code" value="${esc(f.pr_code)}" placeholder="ST941"/></label><label>${T('modelEs')}<input data-k="pr_mes" value="${esc(f.pr_mes)}"/></label><label>${T('modelEn')}<input data-k="pr_men" value="${esc(f.pr_men)}"/></label>
+        <label>${T('colorsCsv')}<input data-k="pr_colors" value="${esc(f.pr_colors)}" placeholder="Negro / Black, Granate / Maroon"/></label><label>${T('childCsv')}<input data-k="pr_child" value="${esc(f.pr_child)}" placeholder="XS, S, M, L, XL"/></label><label>${T('adultCsv')}<input data-k="pr_adult" value="${esc(f.pr_adult)}" placeholder="S, M, L, XL, 2XL"/></label>
+        <label>${T('refPrice')}<input data-k="pr_price" value="${esc(f.pr_price)}" inputmode="decimal"/></label><label>${T('priceMapLbl')}<input data-k="pr_map" value="${esc(f.pr_map)}" placeholder="2XL:14, 3XL:16"/></label><label>${T('design')}<input data-k="pr_design" value="${esc(f.pr_design)}"/></label>
+        <label>${T('photoPath')}<input data-k="pr_photo" value="${esc(f.pr_photo)}" placeholder="assets/img/sleeve-black.jpg"/></label>
         <label>${T('pers')}<select data-k="pr_pers">${opts([{ v: 'none', l: T('pNone') }, { v: 'name', l: T('pName') }, { v: 'nameNumber', l: T('pNameNum') }], f.pr_pers || 'none')}</select></label></div>
-        <div class="muted">${T('photoSlot')}</div><div class="row"><button class="btn sec sm" data-act="addProduct">+ ${T('addProduct')}</button></div></div></div>`;
+        <label>${T('moreModels')}<textarea data-k="pr_more" rows="3" placeholder="ST941 | Hombre | Men">${esc(f.pr_more || '')}</textarea></label>
+        <div class="muted">${T('colorsHint')} ${T('photoSlot')}</div><div class="row"><button class="btn" data-act="addProduct">${editing ? T('save') : '+ ' + T('addProduct')}</button>${editing ? `<button class="btn ghost" data-act="cancelGarment">${T('cancel')}</button>` : ''}</div></div>`;
   }
 
   function vOrders() {
@@ -164,12 +219,17 @@
       <h3>${T('history')}</h3><table><thead><tr><th>${T('registeredAt')}</th><th>${T('by')}</th><th>${T('action')}</th><th>${T('detail')}</th></tr></thead><tbody>${D().hist.filter(h => h.order_id === o.id).sort((a, b) => a.at.localeCompare(b.at)).map(h => `<tr><td>${fdt(h.at)}</td><td>${esc(h.by_email || '')}</td><td>${T('a_' + h.action)}</td><td>${esc(h.detail)}</td></tr>`).join('')}</tbody></table></div>`;
   }
   function vProduction() {
-    return fPeriods().map(p => { const rows = prodRows(p.id), ds = {}; rows.forEach(r => (ds[r.design] = ds[r.design] || []).push(r));
-      return `<div class="card col"><div><div class="eyebrow">${esc(D().sch[p.school_id].name)}</div><h2>${rng(p)}</h2></div>${Object.keys(ds).map(d => `<div class="scroll"><div style="font-weight:700;color:var(--terracotta);margin:6px 0">${T('design')}: ${esc(d)} · ${ds[d].reduce((a, r) => a + r.ordered, 0)} ${T('pcs')}</div>
+    return fPeriods().map(p => {
+      const rows = prodRows(p.id), ds = {}; rows.forEach(r => (ds[r.design] = ds[r.design] || []).push(r));
+      const blocks = Object.keys(ds).map(d => `<div class="scroll"><div style="font-weight:700;color:var(--terracotta);margin:6px 0">${T('design')}: ${esc(d)} · ${ds[d].reduce((a, r) => a + r.ordered, 0)} ${T('pcs')}</div>
         <table><thead><tr><th></th><th>${T('product')}</th><th>${T('color')}</th><th>${T('size')}</th><th class="num">${T('ordered2')}</th><th class="num">${T('prepared')}</th><th class="num">${T('pendingShort')}</th><th>${T('setPrepared')}</th><th></th></tr></thead><tbody>
         ${ds[d].map(r => `<tr><td style="width:60px">${r.photo ? `<img class="thumb" src="${esc(r.photo)}" alt=""/>` : ''}</td><td>${esc(dsc(r))}</td><td>${esc(loc(r.color_name))}</td><td>${esc(szl(r))}</td><td class="num">${r.ordered}</td><td class="num">${r.prepared}</td><td class="num">${r.pending}</td>
         <td><div class="row" style="gap:6px"><input class="sm" data-m="pq" data-k="${esc(p.id + '#' + r.key)}" value="${esc(A.pq[p.id + '#' + r.key] !== undefined ? A.pq[p.id + '#' + r.key] : r.prepared)}" inputmode="numeric"/><button class="lk" data-act="savePrep" data-p="${p.id}" data-key="${esc(r.key)}">${T('save')}</button><button class="lk" style="color:var(--deep-blue)" data-act="allPrep" data-p="${p.id}" data-key="${esc(r.key)}" data-n="${r.ordered}">${T('allPrepared')}</button></div></td>
-        <td>${r.flag ? `<div class="err">${T('flagTxt').replace('{a}', r.was).replace('{b}', r.ordered)}</div>` : ''}</td></tr>`).join('')}</tbody></table></div>`).join('') || `<div class="muted">${T('noItems')}</div>`}</div>`; }).join('') + `<div class="muted">${T('prodNote')}</div>`;
+        <td>${r.flag ? `<div class="err">${T('flagTxt').replace('{a}', r.was).replace('{b}', r.ordered)}</div>` : ''}</td></tr>`).join('')}</tbody></table></div>`).join('');
+      const pre = pieceQty(p.id, 'preorder');
+      const empty = pre ? `<div class="col"><div class="warn">${T('prodEmptyPre').replace('{n}', pre)}</div><div class="row"><button class="btn sm" data-act="openProdSum">${T('openProdSum')}</button></div></div>` : `<div class="muted">${T('noItems')}</div>`;
+      return `<div class="card col"><div><div class="eyebrow">${esc(D().sch[p.school_id].name)}</div><h2>${rng(p)}</h2></div>${blocks || empty}</div>`;
+    }).join('') + `<div class="muted">${T('prodNote')}</div>`;
   }
   function vDeliveries() {
     return fPeriods().map(p => { const ls = act(p.id);
@@ -301,14 +361,15 @@
     const ps = fPeriods(), gopts = [{ v: 'all', l: T('fAll') }, ...(ps.length === 1 ? D().groups.filter(g => g.period_id === ps[0].id).map(g => ({ v: g.id, l: gl(g) })) : [])];
     const extra = A.rType === 'prodsum' ? `<label>${T('prodStatus')}<select data-s="rStatus" data-re>${opts([{ v: 'all', l: T('sumAll') }, { v: 'preorder', l: T('sumPreorder') }, { v: 'active', l: T('sumActive') }], A.rStatus || 'all')}</select></label>
       <label style="flex-direction:row;align-items:center;gap:10px;min-height:44px;grid-column:1 / -1"><input type="checkbox" data-s="rByGroup" data-re ${A.rByGroup ? 'checked' : ''}/> <span>${T('byGroup')}</span></label>` : '';
-    return `<div class="no-print card col"><div class="grid"><label>${T('reportType')}<select data-s="rType" data-re>${opts(['prodsum', 'preorders', 'production', 'prep', 'individual', 'delivery'].map(k => ({ v: k, l: T('r_' + k) })), A.rType)}</select></label>
+    return `<div class="no-print card col"><div class="grid"><label>${T('reportType')}<select data-s="rType" data-re>${opts(['prodsum', 'preorders', 'prep', 'individual', 'delivery', 'production'].map(k => ({ v: k, l: T('r_' + k) })), A.rType)}</select></label>
       <label>${T('teacher')}<select data-s="rGroup" data-re>${opts(gopts, A.rGroup)}</select></label><label>${T('reportLang')}<select data-s="rLang" data-re>${opts([{ v: 'es', l: 'Español' }, { v: 'en', l: 'English' }], A.rLang)}</select></label>
       <label>${T('paper')}<select data-s="rPaper" data-re>${opts([{ v: 'letter', l: T('letterOpt') }, { v: 'a4', l: 'A4' }], A.rPaper)}</select></label>${extra}</div>
+      ${A.rType === 'prodsum' ? `<p class="muted" style="margin:0">${T('reportLand')}</p>` : ''}${A.rType === 'production' ? `<p class="warn" style="margin:0">${T('prepOnly')}</p>` : ''}
       <div class="row"><button class="btn" data-act="print">${T('print')}</button>${A.rType === 'prodsum' ? `<button class="btn sec" data-act="csvProd">${T('downloadCsv')}</button>` : ''}<span class="muted">${A.rType === 'prodsum' ? T('prodSumPrint') : T('printNote')}</span></div></div>${sheets()}`;
   }
 
   // ---- armado ----
-  const VIEWS = [['summary', 'nSummary', vSummary], ['schools', 'nSchools', vSchools], ['orders', 'nOrders', vOrders], ['production', 'nProduction', vProduction], ['deliveries', 'nDeliveries', vDeliveries], ['reports', 'nReports', vReports]];
+  const VIEWS = [['reports', 'nReports', vReports], ['summary', 'nSummary', vSummary], ['schools', 'nSchools', vSchools], ['orders', 'nOrders', vOrders], ['production', 'nProduction', vProduction], ['deliveries', 'nDeliveries', vDeliveries]];
   const langBtns = () => ['es', 'en'].map(l => `<button class="lang ${JK.lang === l ? 'on' : ''}" data-act="lang" data-v="${l}">${l.toUpperCase()}</button>`).join('');
   function render() {
     document.documentElement.lang = JK.lang;
@@ -360,7 +421,9 @@
   const num = s => { const n = String(s).trim() === '' ? null : Number(s); return n !== null && isNaN(n) ? undefined : n; };
   const acts = {
     lang: el => { JK.setLang(el.dataset.v); A.rLang = el.dataset.v; render(); },
-    nav: el => { A.view = el.dataset.v; render(); }, reload: () => loadAll(), print: () => window.print(),
+    nav: el => { A.view = el.dataset.v; render(); },
+    openProdSum: () => { A.view = 'reports'; A.rType = 'prodsum'; A.rStatus = A.rStatus || 'all'; render(); },
+    reload: () => loadAll(), print: () => window.print(),
     csvProd: () => {
       const blob = new Blob(['\uFEFF' + prodCsv()], { type: 'text/csv;charset=utf-8' });
       const a = document.createElement('a');
@@ -413,12 +476,24 @@
       render();
     },
     logout: async () => { clearRecovery(); A.gate = ''; await sb().auth.signOut(); A.user = null; A.ok = false; A.D = null; render(); },
-    newSchool: () => { A.schoolForm = 'new'; Object.assign(A.f, { sc_name: '', sc_collector: '', sc_contact: '', sc_logo: '' }); render(); },
+    newSchool: () => { A.schoolForm = 'new'; A.editProd = null; Object.assign(A.f, { sc_name: '', sc_collector: '', sc_contact: '', sc_logo: '', sc_open: todayLA(), sc_close: '', sc_mode: 'mixed', sc_groups_text: '' }); render(); },
     editSchool: el => { const s = D().sch[el.dataset.id]; A.schoolForm = s.id; Object.assign(A.f, { sc_name: s.name, sc_collector: s.collector, sc_contact: s.contact, sc_logo: s.logo_path || '' }); render(); },
     cancelSchool: () => { A.schoolForm = null; render(); },
-    saveSchool: async () => { const f = A.f; if (!(f.sc_name || '').trim()) return toast(T('msgSchoolInvalid'));
-      const row = { name: f.sc_name.trim(), collector: f.sc_collector || '', contact: f.sc_contact || '', logo_path: (f.sc_logo || '').trim() || null };
-      const { error } = A.schoolForm === 'new' ? await sb().from('schools').insert(row) : await sb().from('schools').update(row).eq('id', A.schoolForm); if (error) return toast(errMsg(error)); A.schoolForm = null; await loadAll(); toast(T('msgSaved')); },
+    saveSchool: async () => {
+      const f = A.f; if (!(f.sc_name || '').trim()) return toast(T('msgSchoolInvalid'));
+      if (A.schoolForm === 'new') {
+        if (!f.sc_open || !f.sc_close || f.sc_close < f.sc_open) return toast(T('msgPeriodInvalid'));
+        const groups = parseGroupLines(f.sc_groups_text);
+        if (!groups.length) return toast(T('vGroups'));
+        const r = await rpc('admin_create_school', { p_name: f.sc_name.trim(), p_collector: f.sc_collector || '', p_contact: f.sc_contact || '', p_logo: (f.sc_logo || '').trim(), p_open: f.sc_open, p_close: f.sc_close, p_mode: f.sc_mode || 'mixed', p_groups: groups });
+        if (r.error) return;
+        A.schoolForm = null; await loadAll();
+        if (r.data && r.data.period_id) { A.fSchool = r.data.school_id; acts.cfg({ dataset: { id: r.data.period_id } }); }
+        return toast(T('schoolReady'));
+      }
+      const r = await rpc('admin_update_school', { p_school: A.schoolForm, p_name: f.sc_name.trim(), p_collector: f.sc_collector || '', p_contact: f.sc_contact || '', p_logo: (f.sc_logo || '').trim() });
+      if (r.error) return; A.schoolForm = null; await loadAll(); toast(T('msgSaved'));
+    },
     newPeriod: el => { A.newFor = el.dataset.id; Object.assign(A.f, { np_open: todayLA(), np_close: '', np_mode: 'mixed' }); render(); }, cancelNew: () => { A.newFor = null; render(); },
     createPeriod: async el => { const f = A.f; if (!f.np_open || !f.np_close || f.np_close < f.np_open) return toast(T('msgPeriodInvalid'));
       const r = await rpc('admin_create_period', { p_school: el.dataset.id, p_open: f.np_open, p_close: f.np_close, p_mode: f.np_mode || 'mixed' }); if (r.error) return; A.newFor = null; await loadAll(); acts.cfg({ dataset: { id: r.data } }); toast(T('msgCreated')); },
@@ -428,15 +503,40 @@
     saveDates: async () => { if (!A.f.ed_open || !A.f.ed_close || A.f.ed_close < A.f.ed_open) return toast(T('dateErr')); const r = await rpc('admin_update_dates', { p_period: A.cfg, p_open: A.f.ed_open, p_close: A.f.ed_close }); await loadAll(); if (!r.error) toast(T('msgSaved')); },
     addGroup: async () => { const f = A.f; if (!(f.gr_teacher || '').trim()) return; const { error } = await sb().from('groups').insert({ period_id: A.cfg, teacher: f.gr_teacher.trim(), grade: f.gr_grade || '', room: f.gr_room || '', sort: 999 }); if (error) return toast(errMsg(error)); Object.assign(f, { gr_teacher: '', gr_grade: '', gr_room: '' }); await loadAll(); },
     delGroup: async el => { const { error } = await sb().from('groups').delete().eq('id', el.dataset.id); if (error) return toast(T('msgGroupUsed')); await loadAll(); },
-    toggleProduct: async el => { await sb().from('products').update({ enabled: el.checked }).eq('id', el.dataset.id); await loadAll(); },
+    toggleProduct: async el => { const r = await rpc('admin_set_product_enabled', { p_id: el.dataset.id, p_enabled: el.checked }); await loadAll(); if (!r.error) toast(T('msgSaved')); },
     saveProduct: async el => { const x = D().prod[el.dataset.id], g = k => A.pf[x.id] && A.pf[x.id][k]; const price = g('price') !== undefined ? num(g('price')) : x.base_price; if (price === undefined) return toast(T('msgQty'));
       const map = {}; if (g('map') !== undefined) { for (const pair of csv(g('map'))) { const [k, v] = pair.split(':'); const n = Number(v); if (!k || isNaN(n)) return toast(T('msgQty')); map[k.trim()] = n; } } else Object.assign(map, x.price_map);
       const child = g('child') !== undefined ? csv(g('child')) : (x.sizes.child || []), adult = g('adult') !== undefined ? csv(g('adult')) : (x.sizes.adult || []);
-      const ages = [child.length ? 'child' : '', adult.length ? 'adult' : ''].filter(Boolean), pend = (x.pending_sizes || []).filter(z => !adult.includes(z) && !child.includes(z));
-      const { error } = await sb().from('products').update({ base_price: price, price_map: map, sizes: { child, adult }, ages, pending_sizes: pend, sizes_pending: ages.length ? false : x.sizes_pending }).eq('id', x.id); if (error) return toast(errMsg(error)); delete A.pf[x.id]; await loadAll(); toast(T('msgSaved')); },
-    addProduct: async () => { const f = A.f, child = csv(f.pr_child), adult = csv(f.pr_adult), colors = csv(f.pr_colors); if (!(f.pr_es || f.pr_en) || !colors.length || (!child.length && !adult.length)) return toast(T('msgProductInvalid')); const price = num(f.pr_price || ''); if (price === undefined) return toast(T('msgQty'));
-      const { error } = await sb().from('products').insert({ period_id: A.cfg, key: slug(f.pr_en || f.pr_es), category: f.pr_cat || 'school', name: { es: f.pr_es || f.pr_en, en: f.pr_en || f.pr_es }, design: f.pr_design || '', personalization: f.pr_pers || 'none', base_price: price, ages: [child.length ? 'child' : '', adult.length ? 'adult' : ''].filter(Boolean), sizes: { child, adult }, colors: colors.map(c => ({ id: slug(c), es: c, en: c, sw: '#cccccc', photo: '' })), enabled: true, sort: 500 });
-      if (error) return toast(errMsg(error)); Object.assign(f, { pr_es: '', pr_en: '', pr_colors: '', pr_child: '', pr_adult: '', pr_price: '', pr_design: '' }); await loadAll(); toast(T('msgSaved')); },
+      if (!child.length && !adult.length) return toast(T('msgProductInvalid'));
+      const ages = [child.length ? 'child' : '', adult.length ? 'adult' : ''].filter(Boolean);
+      const product = { key: x.key, category: x.category, name: x.name, design: x.design || '', personalization: x.personalization || 'none', base_price: price, price_map: map, ages, sizes: { child, adult }, colors: x.colors || [], models: x.models || [], photo: x.photo || '', enabled: x.enabled, sort: x.sort };
+      const r = await rpc('admin_save_product', { p_period: x.period_id, p_id: x.id, p_product: product }); if (r.error) return; delete A.pf[x.id]; await loadAll(); toast(T('msgSaved')); },
+    editGarment: el => {
+      const x = D().prod[el.dataset.id], models = x.models || [], first = models[0] || {};
+      A.editProd = x.id;
+      Object.assign(A.f, {
+        pr_es: (x.name && x.name.es) || '', pr_en: (x.name && x.name.en) || '', pr_cat: x.category || 'school',
+        pr_colors: (x.colors || []).map(c => c.es && c.en && c.es !== c.en ? c.es + ' / ' + c.en : (c.es || c.en || '')).join(', '),
+        pr_child: ((x.sizes && x.sizes.child) || []).join(', '), pr_adult: ((x.sizes && x.sizes.adult) || []).join(', '),
+        pr_price: x.base_price == null ? '' : String(x.base_price), pr_design: x.design || '', pr_pers: x.personalization || 'none', pr_photo: x.photo || '',
+        pr_code: first.code || '', pr_mes: (first.label && first.label.es) || '', pr_men: (first.label && first.label.en) || '',
+        pr_more: models.slice(1).map(m => [m.code, (m.label && m.label.es) || '', (m.label && m.label.en) || ''].filter(Boolean).join(' | ')).join('\n'),
+        pr_map: Object.entries(x.price_map || {}).map(([k, v]) => k + ':' + v).join(', ')
+      });
+      render();
+      const box = document.getElementById('garment-form'); if (box) box.scrollIntoView({ block: 'center' });
+    },
+    cancelGarment: () => { A.editProd = null; blankGarment(); render(); },
+    addProduct: async () => {
+      const existing = A.editProd ? D().prod[A.editProd] : null;
+      const child = csv(A.f.pr_child), adult = csv(A.f.pr_adult), colors = parseColors(A.f.pr_colors, existing);
+      if (!(A.f.pr_es || A.f.pr_en) || !colors.length || (!child.length && !adult.length)) return toast(T('msgProductInvalid'));
+      const price = num(A.f.pr_price || ''); if (price === undefined) return toast(T('msgQty'));
+      const map = {};
+      if ((A.f.pr_map || '').trim()) { for (const pair of csv(A.f.pr_map)) { const [k, v] = pair.split(':'); const n = Number(v); if (!k || isNaN(n)) return toast(T('msgQty')); map[k.trim()] = n; } }
+      const product = { key: slug(A.f.pr_code || A.f.pr_en || A.f.pr_es), category: A.f.pr_cat || 'school', name: { es: A.f.pr_es || A.f.pr_en, en: A.f.pr_en || A.f.pr_es }, design: A.f.pr_design || '', personalization: A.f.pr_pers || 'none', base_price: price, price_map: map, ages: [child.length ? 'child' : '', adult.length ? 'adult' : ''].filter(Boolean), sizes: { child, adult }, colors, models: parseModels(A.f), photo: (A.f.pr_photo || '').trim(), enabled: existing ? existing.enabled : true, sort: existing ? existing.sort : 500 };
+      const r = await rpc('admin_save_product', { p_period: A.cfg, p_id: existing ? existing.id : null, p_product: product });
+      if (r.error) return; A.editProd = null; blankGarment(); await loadAll(); toast(T('msgSaved')); },
     confirmPreorder: async el => { if (!window.confirm(T('confirmQuestion'))) return; const r = await rpc('admin_confirm_preorder', { p_order: el.dataset.id }); if (!r.error) { await loadAll(); toast(T('msgSaved')); } },
     openOrder: el => { A.orderSel = el.dataset.id; render(); }, closeOrder: () => { A.orderSel = null; render(); },
     saveLine: async el => { const l = D().lines.find(x => x.id === el.dataset.id), g = (k, d) => A.eq[l.id + ':' + k] !== undefined ? A.eq[l.id + ':' + k] : d;
