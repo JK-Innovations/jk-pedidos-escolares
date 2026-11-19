@@ -3,7 +3,7 @@
   const { T, esc, money, loc, fd, fdt, szl, dsc, logoSrc } = JK;
   const root = document.getElementById('app');
   const A = { user: null, ok: false, msg: '', D: null, loading: false, view: 'schools', fSchool: 'all', fPeriod: 'all', orderSel: null, delSel: null, cfg: null, newFor: null, schoolForm: null, editProd: null,
-    toast: '', rType: 'prodsum', rGroup: 'all', rLang: JK.lang, rPaper: 'letter', rStatus: 'all', rByGroup: false, gate: '', recovery: false, showPass: false, sending: false, authReady: false, f: {}, pq: {}, eq: {}, dq: {}, pf: {}, zoom: '' };
+    toast: '', rType: 'prodsum', rGroup: 'all', rLang: JK.lang, rPaper: 'letter', rStatus: 'all', rByGroup: false, gate: '', recovery: false, showPass: false, sending: false, authReady: false, f: {}, pq: {}, eq: {}, dq: {}, pf: {}, zoom: '', more: {} };
   const sb = () => JK.sb();
   const recoveryFromHash = () => { const raw = (location.hash || '').replace(/^#/, ''); return !!raw && new URLSearchParams(raw).get('type') === 'recovery'; };
   const markRecovery = () => { A.recovery = true; try { sessionStorage.setItem('jk_pw_recovery', '1'); } catch (e) {} };
@@ -121,7 +121,7 @@
     return mime ? { mime, ext } : null;
   };
   const revokeLogoPreview = () => { if (A.logoPreview) { try { URL.revokeObjectURL(A.logoPreview); } catch (e) {} A.logoPreview = ''; } };
-  const resetLogoPick = () => { revokeLogoPreview(); A.logoFile = null; A.logoErr = ''; A.logoBusy = false; };
+  const resetLogoPick = () => { revokeLogoPreview(); A.logoFile = null; A.logoErr = ''; A.logoBusy = false; A.logoOpen = false; };
   const storageErrText = error => !error ? '' : typeof error === 'string' ? error : [error.message, error.error, error.statusCode, error.status].filter(Boolean).join(' ');
   const storageKeyFromLogo = value => {
     const s = String(value || '');
@@ -178,7 +178,7 @@
   function summaryHead() {
     const st = periodStats();
     const tot = { pre: 0, preN: 0, conf: 0, d: 0, p: 0 }; st.forEach(({ pre, preN, x }) => { tot.pre += pre; tot.preN += preN; tot.conf += x.ordered; tot.d += x.delivered; tot.p += x.pending; });
-    const pendingCard = `<div class="card col" id="pending-review" style="border:2px solid var(--light-terracotta);background:var(--terracotta-tint)"><div class="row between" style="align-items:flex-end"><div><div class="eyebrow">${T('pendingReview')}</div><div class="row" style="align-items:flex-end;gap:28px"><div><div class="stat" data-pending-orders>${tot.preN}</div><div style="font-weight:700">${T('pendingReviewOrders')}</div></div><div><div class="stat" data-pending-pieces>${tot.pre}</div><div style="font-weight:700">${T('pendingReviewPieces')}</div></div></div></div><button class="btn" data-act="openPending">${T('reviewPending')}</button></div></div>`;
+    const pendingCard = `<div class="card col callout" id="pending-review"><div class="row between" style="align-items:flex-end"><div><div class="eyebrow">${T('pendingReview')}</div><div class="row" style="align-items:flex-end;gap:28px"><div><div class="stat" data-pending-orders>${tot.preN}</div><div class="muted">${T('pendingReviewOrders')}</div></div><div><div class="stat" data-pending-pieces>${tot.pre}</div><div class="muted">${T('pendingReviewPieces')}</div></div></div></div><button class="btn" data-act="openPending">${T('reviewPending')}</button></div></div>`;
     const stats = [['prePieces', tot.pre], ['confPieces', tot.conf], ['delivered', tot.d], ['pending', tot.p]].map(([k, v]) => `<div class="card"><div class="stat">${v}</div><div class="muted">${T(k)}</div></div>`).join('');
     const bySchool = `<div class="card scroll"><h3 style="margin-bottom:10px">${T('bySchool')}</h3><table><thead><tr><th>${T('school')}</th><th class="num">${T('pendingPrePieces')}</th><th class="num">${T('confPieces')}</th><th class="num">${T('pendingShort')}</th></tr></thead><tbody>
       ${st.map(({ p, pre, x }) => `<tr><td><b>${esc(D().sch[p.school_id].name)}</b><div class="muted">${rng(p)}</div></td><td class="num"><b data-pre-pieces>${pre}</b></td><td class="num">${x.ordered}</td><td class="num">${x.pending}</td></tr>`).join('')}</tbody></table></div>`;
@@ -192,29 +192,33 @@
   }
   function vSchools() {
     const sf = A.schoolForm, f = A.f;
-    const fresh = sf === 'new' ? `<h3>${T('schoolDates')}</h3><div class="grid"><label>${T('openFrom')}<input type="date" data-k="sc_open" value="${esc(f.sc_open)}"/></label><label>${T('openUntil')}<input type="date" data-k="sc_close" value="${esc(f.sc_close)}"/></label>
-        <label>${T('mode')}<select data-k="sc_mode">${opts([{ v: 'coord', l: T('mCoord') }, { v: 'each', l: T('mEach') }, { v: 'mixed', l: T('mMixed') }], f.sc_mode || 'mixed')}</select></label></div>
-        <label>${T('groupLines')}<textarea data-k="sc_groups_text" rows="4" placeholder="Anciso | KN&#10;Bessolo | KN">${esc(f.sc_groups_text || '')}</textarea></label><div class="muted">${T('groupHint')}</div>` : '';
+    const fresh = sf === 'new' ? `<h3>${T('schoolDates')}</h3><div class="grid"><label>${T('openFrom')}<input type="date" data-k="sc_open" value="${esc(f.sc_open)}"/></label><label>${T('openUntil')}<input type="date" data-k="sc_close" value="${esc(f.sc_close)}"/></label></div>
+        <label>${T('groupLines')}<textarea data-k="sc_groups_text" rows="4" placeholder="Anciso | KN&#10;Bessolo | KN">${esc(f.sc_groups_text || '')}</textarea></label><div class="muted">${T('groupHint')}</div>
+        <button type="button" class="lk" data-act="toggleMore" data-more="newSchool">${A.more.newSchool ? T('lessOpts') : T('moreOpts')}</button>
+        ${A.more.newSchool ? `<label>${T('mode')}<select data-k="sc_mode">${opts([{ v: 'coord', l: T('mCoord') }, { v: 'each', l: T('mEach') }, { v: 'mixed', l: T('mMixed') }], f.sc_mode || 'mixed')}</select></label>` : ''}` : '';
     const savedLogo = logoSrc(f.sc_logo);
     const previewSrc = A.logoPreview || savedLogo;
-    const logoBox = `<div class="col" style="gap:8px"><span style="font-size:13px;font-weight:600">${T('logoFile')}</span>
+    const hasLogo = !!(A.logoFile || (f.sc_logo || '').trim() || previewSrc);
+    const logoOpen = `<div class="col" id="logo-editor" style="gap:8px"><span style="font-size:13px;font-weight:600">${T('logoFile')}</span>
       <div class="row" style="align-items:center">${previewSrc ? `<img class="logo-preview" src="${esc(previewSrc)}" alt="${esc(T('logoPreview'))}"/>` : ''}
         <label class="btn sec filebtn">${T('uploadLogo')}<input class="filepick" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml,.png,.jpg,.jpeg,.webp,.svg" data-logo aria-label="${esc(T('uploadLogo'))}" ${A.logoBusy ? 'disabled' : ''}/></label>
-        ${(A.logoFile || (f.sc_logo || '').trim() || previewSrc) ? `<button type="button" class="btn ghost" data-act="clearLogo" ${A.logoBusy ? 'disabled' : ''}>${T('remove')}</button>` : ''}</div>
+        ${hasLogo ? `<button type="button" class="lk" data-act="clearLogo" ${A.logoBusy ? 'disabled' : ''}>${T('remove')}</button>` : ''}</div>
       <div class="muted">${T('logoSlot')}</div>${A.logoErr ? `<div class="err" role="alert">${esc(A.logoErr)}</div>` : ''}</div>`;
-    const form = sf ? `<div style="border:1px solid var(--line);border-radius:12px;padding:16px;background:var(--paper)" class="col"><h3>${sf === 'new' ? T('addSchool') : T('editSchool')}</h3><div class="muted">${sf === 'new' ? T('schoolSetup') : ''}</div>
+    const logoClosed = `<div class="row" id="logo-toggle" style="align-items:center">${savedLogo ? `<img class="logo-mini" src="${esc(savedLogo)}" alt="${esc(T('logoPreview'))}"/>` : ''}<button type="button" class="lk" data-act="toggleLogo" style="min-height:44px">${savedLogo ? T('changeLogo') : T('addLogo')}</button></div>`;
+    const logoBox = A.logoOpen || A.logoBusy ? logoOpen : logoClosed;
+    const form = sf ? `<div class="stack col"><h3>${sf === 'new' ? T('addSchool') : T('editSchool')}</h3><div class="muted">${sf === 'new' ? T('schoolSetup') : ''}</div>
       <div class="grid"><label>${T('name')}<input data-k="sc_name" value="${esc(f.sc_name)}"/></label><label>${T('collector')}<input data-k="sc_collector" value="${esc(f.sc_collector)}"/></label><label>${T('contactData')}<input data-k="sc_contact" value="${esc(f.sc_contact)}"/></label></div>
-      ${logoBox}${fresh}<div class="row"><button class="btn" data-act="saveSchool" ${A.logoBusy ? 'disabled' : ''}>${A.logoBusy ? T('uploadingLogo') : T('save')}</button><button class="btn ghost" data-act="cancelSchool" ${A.logoBusy ? 'disabled' : ''}>${T('cancel')}</button></div></div>` : '';
+      ${logoBox}${fresh}<div class="row"><button class="btn" data-act="saveSchool" ${A.logoBusy ? 'disabled' : ''}>${A.logoBusy ? T('uploadingLogo') : T('save')}</button><button type="button" class="lk" data-act="cancelSchool" ${A.logoBusy ? 'disabled' : ''}>${T('cancel')}</button></div></div>` : '';
     const schools = `<div class="card col"><div class="row between"><h2>${T('nSchoolsOnly')}</h2><button class="btn" data-act="newSchool">+ ${T('addSchool')}</button></div>${form}<div class="scroll"><table><thead><tr><th>${T('name')}</th><th>${T('collector')}</th><th>${T('contactData')}</th><th></th></tr></thead><tbody>
-      ${D().schools.map(s => `<tr><td><b>${esc(s.name)}</b></td><td>${esc(s.collector)}</td><td>${esc(s.contact)}</td><td><button class="btn ghost sm" data-act="editSchool" data-id="${s.id}">${T('edit')}</button></td></tr>`).join('')}</tbody></table></div></div>`;
+      ${D().schools.map(s => `<tr><td><b>${esc(s.name)}</b></td><td>${esc(s.collector)}</td><td>${esc(s.contact)}</td><td><button type="button" class="lk" data-act="editSchool" data-id="${s.id}">${T('edit')}</button></td></tr>`).join('')}</tbody></table></div></div>`;
     const blocks = D().schools.filter(s => A.fSchool === 'all' || s.id === A.fSchool).map(s => {
-      const nf = A.newFor === s.id ? `<div style="border:1px solid var(--line);border-radius:12px;padding:16px;background:var(--paper)" class="col"><h3>${T('newPeriod')}</h3><div class="grid"><label>${T('openFrom')}<input type="date" data-k="np_open" value="${esc(f.np_open)}"/></label><label>${T('openUntil')}<input type="date" data-k="np_close" value="${esc(f.np_close)}"/></label>
+      const nf = A.newFor === s.id ? `<div class="stack col"><h3>${T('newPeriod')}</h3><div class="grid"><label>${T('openFrom')}<input type="date" data-k="np_open" value="${esc(f.np_open)}"/></label><label>${T('openUntil')}<input type="date" data-k="np_close" value="${esc(f.np_close)}"/></label>
         <label>${T('mode')}<select data-k="np_mode">${opts([{ v: 'coord', l: T('mCoord') }, { v: 'each', l: T('mEach') }, { v: 'mixed', l: T('mMixed') }], f.np_mode || 'mixed')}</select></label></div><div class="muted">${T('copyNote')}</div>
         <div class="row"><button class="btn" data-act="createPeriod" data-id="${s.id}">${T('create')}</button><button class="btn ghost" data-act="cancelNew">${T('cancel')}</button></div></div>` : '';
       return `<div class="card col"><div class="row between"><h2>${esc(s.name)}</h2><button class="btn sm" data-act="newPeriod" data-id="${s.id}">+ ${T('newPeriod')}</button></div>${nf}<div class="scroll"><table><thead><tr><th>${T('dates')}</th><th>${T('mode')}</th><th>${T('status')}</th><th>${T('publicLink')}</th><th></th></tr></thead><tbody>
         ${D().periods.filter(p => p.school_id === s.id).map(p => `<tr><td><b>${rng(p)}</b></td><td>${T(p.mode === 'mixed' ? 'mMixed' : p.mode === 'coord' ? 'mCoord' : 'mEach')}</td>
         <td><div class="row" style="gap:8px"><select data-act="setStatus" data-id="${p.id}" style="width:200px">${opts([{ v: 'pending', l: T('stPending') }, { v: 'open', l: T('stOpen') }, { v: 'closed', l: T('stClosed') }], p.status)}</select><span class="muted">${stl(p)}</span></div></td>
-        <td><button class="lk" data-act="copyLink" data-id="${p.id}">${T('copyLink')}</button><div class="muted">?p=${esc(p.slug)}</div></td><td><button class="btn sec sm" data-act="cfg" data-id="${p.id}">${T('configure')}</button></td></tr>`).join('')}</tbody></table></div></div>`;
+        <td><button class="lk" data-act="copyLink" data-id="${p.id}">${T('copyLink')}</button><div class="muted">?p=${esc(p.slug)}</div></td><td><button type="button" class="lk" data-act="cfg" data-id="${p.id}">${T('configure')}</button></td></tr>`).join('')}</tbody></table></div></div>`;
     }).join('');
     return schools + blocks + cfgPanel();
   }
@@ -227,8 +231,8 @@
       <td style="font-size:13px">${esc(x.colors.map(c => loc(c)).join(', '))}<div style="margin-top:6px;grid-template-columns:1fr 1fr" class="grid"><label>${T('youth')}<input data-m="pf" data-k="${x.id}:child" value="${esc(pfv(x, 'child', (x.sizes.child || []).join(', ')))}"/></label><label>${T('adultW')}<input data-m="pf" data-k="${x.id}:adult" value="${esc(pfv(x, 'adult', (x.sizes.adult || []).join(', ')))}"/></label></div></td>
       <td><div class="col" style="gap:6px"><label>${T('refPrice')}<input class="sm" data-m="pf" data-k="${x.id}:price" value="${esc(pfv(x, 'price', x.base_price == null ? '' : x.base_price))}" inputmode="decimal"/></label><label>${T('priceMapLbl')}<input data-m="pf" data-k="${x.id}:map" value="${esc(pfv(x, 'map', map))}" placeholder="2XL:14, 3XL:16"/></label><button class="btn sec sm" data-act="saveProduct" data-id="${x.id}">${T('save')}</button></div></td>
       <td><input type="checkbox" data-act="toggleProduct" data-id="${x.id}" ${x.enabled ? 'checked' : ''}/></td></tr>`; }).join('');
-    return `<div class="card col" style="border-color:var(--deep-blue)"><div class="row between"><div><div class="eyebrow">${T('configure')}</div><h2>${esc(pname(p))}</h2></div><button class="lk" data-act="closeCfg">${T('close2')} ✕</button></div>
-      <div style="background:var(--paper);border-radius:12px;padding:12px 16px" class="col"><b>${T('validation')}</b>${v.e.length ? '' : `<div class="ok">${T('validOk')}</div>`}${v.e.map(t => `<div class="err">• ${esc(t)}</div>`).join('')}${v.w.map(t => `<div class="warn">• ${esc(t)}</div>`).join('')}</div>
+    return `<div class="card col"><div class="row between"><div><div class="eyebrow">${T('configure')}</div><h2>${esc(pname(p))}</h2></div><button class="lk" data-act="closeCfg">${T('close2')} ✕</button></div>
+      <div class="note col"><b>${T('validation')}</b>${v.e.length ? '' : `<div class="ok">${T('validOk')}</div>`}${v.e.map(t => `<div class="err">• ${esc(t)}</div>`).join('')}${v.w.map(t => `<div class="warn">• ${esc(t)}</div>`).join('')}</div>
       <div class="col" style="gap:6px"><b>${T('publicLink')}</b><input readonly value="${esc(publicUrl(p))}" onclick="this.select()"/></div>
       <h3>${T('editDates')}</h3><div class="grid"><label>${T('openFrom')}<input type="date" data-k="ed_open" value="${esc(f.ed_open)}"/></label><label>${T('openUntil')}<input type="date" data-k="ed_close" value="${esc(f.ed_close)}"/></label></div>
       <div class="row"><button class="btn sec sm" data-act="saveDates">${T('saveDates')}</button></div>${log.length ? `<div class="muted"><b>${T('dateLog')}</b>${log.map(h => `<div>${fdt(h.at)} · ${esc(h.by_email || '')} · ${esc(h.detail)}</div>`).join('')}</div>` : ''}
@@ -239,16 +243,22 @@
   }
   function garmentForm(f) {
     const editing = !!A.editProd;
-    return `<div id="garment-form" style="border:1px solid var(--line);border-radius:12px;padding:16px;background:var(--paper)" class="col"><h3>${editing ? T('editGarment') : T('addProduct')}</h3><div class="grid">
-        <label>${T('nameEs')}<input data-k="pr_es" value="${esc(f.pr_es)}"/></label><label>${T('nameEn')}<input data-k="pr_en" value="${esc(f.pr_en)}"/></label>
-        <label>${T('category')}<select data-k="pr_cat">${opts([{ v: 'school', l: T('catSchool') }, { v: 'staff', l: T('catStaff') }], f.pr_cat || 'school')}</select></label>
-        <label>${T('modelCode')}<input data-k="pr_code" value="${esc(f.pr_code)}" placeholder="ST941"/></label><label>${T('modelEs')}<input data-k="pr_mes" value="${esc(f.pr_mes)}"/></label><label>${T('modelEn')}<input data-k="pr_men" value="${esc(f.pr_men)}"/></label>
-        <label>${T('colorsCsv')}<input data-k="pr_colors" value="${esc(f.pr_colors)}" placeholder="Negro / Black, Granate / Maroon"/></label><label>${T('childCsv')}<input data-k="pr_child" value="${esc(f.pr_child)}" placeholder="XS, S, M, L, XL"/></label><label>${T('adultCsv')}<input data-k="pr_adult" value="${esc(f.pr_adult)}" placeholder="S, M, L, XL, 2XL"/></label>
-        <label>${T('refPrice')}<input data-k="pr_price" value="${esc(f.pr_price)}" inputmode="decimal"/></label><label>${T('priceMapLbl')}<input data-k="pr_map" value="${esc(f.pr_map)}" placeholder="2XL:14, 3XL:16"/></label><label>${T('design')}<input data-k="pr_design" value="${esc(f.pr_design)}"/></label>
+    const extra = A.more.garment ? `<div class="grid">
+        <label>${T('modelEs')}<input data-k="pr_mes" value="${esc(f.pr_mes)}"/></label><label>${T('modelEn')}<input data-k="pr_men" value="${esc(f.pr_men)}"/></label>
+        <label>${T('priceMapLbl')}<input data-k="pr_map" value="${esc(f.pr_map)}" placeholder="2XL:14, 3XL:16"/></label><label>${T('design')}<input data-k="pr_design" value="${esc(f.pr_design)}"/></label>
         <label>${T('photoPath')}<input data-k="pr_photo" value="${esc(f.pr_photo)}" placeholder="assets/img/sleeve-black.jpg"/></label>
         <label>${T('pers')}<select data-k="pr_pers">${opts([{ v: 'none', l: T('pNone') }, { v: 'name', l: T('pName') }, { v: 'nameNumber', l: T('pNameNum') }], f.pr_pers || 'none')}</select></label></div>
         <label>${T('moreModels')}<textarea data-k="pr_more" rows="3" placeholder="ST941 | Hombre | Men">${esc(f.pr_more || '')}</textarea></label>
-        <div class="muted">${T('colorsHint')} ${T('photoSlot')}</div><div class="row"><button class="btn" data-act="addProduct">${editing ? T('save') : '+ ' + T('addProduct')}</button>${editing ? `<button class="btn ghost" data-act="cancelGarment">${T('cancel')}</button>` : ''}</div></div>`;
+        <div class="muted">${T('photoSlot')}</div>` : '';
+    return `<div id="garment-form" class="stack col"><h3>${editing ? T('editGarment') : T('addProduct')}</h3><div class="grid">
+        <label>${T('nameEs')}<input data-k="pr_es" value="${esc(f.pr_es)}"/></label><label>${T('nameEn')}<input data-k="pr_en" value="${esc(f.pr_en)}"/></label>
+        <label>${T('category')}<select data-k="pr_cat">${opts([{ v: 'school', l: T('catSchool') }, { v: 'staff', l: T('catStaff') }], f.pr_cat || 'school')}</select></label>
+        <label>${T('modelCode')}<input data-k="pr_code" value="${esc(f.pr_code)}" placeholder="ST941"/></label>
+        <label>${T('colorsCsv')}<input data-k="pr_colors" value="${esc(f.pr_colors)}" placeholder="Negro / Black, Granate / Maroon"/></label><label>${T('childCsv')}<input data-k="pr_child" value="${esc(f.pr_child)}" placeholder="XS, S, M, L, XL"/></label><label>${T('adultCsv')}<input data-k="pr_adult" value="${esc(f.pr_adult)}" placeholder="S, M, L, XL, 2XL"/></label>
+        <label>${T('refPrice')}<input data-k="pr_price" value="${esc(f.pr_price)}" inputmode="decimal"/></label></div>
+        <div class="muted">${T('colorsHint')}</div>
+        <button type="button" class="lk" data-act="toggleMore" data-more="garment">${A.more.garment ? T('lessOpts') : T('moreOpts')}</button>${extra}
+        <div class="row"><button class="btn" data-act="addProduct">${editing ? T('save') : '+ ' + T('addProduct')}</button>${editing ? `<button type="button" class="lk" data-act="cancelGarment">${T('cancel')}</button>` : ''}</div></div>`;
   }
 
   function vOrders() {
@@ -278,7 +288,7 @@
         ${l.personalization ? `<label>${T('pers')}<input data-m="eq" data-k="${l.id}:t" value="${esc(ev(l, 't', l.personalization))}"/></label>` : ''}</div>
         <div class="row"><button class="btn sm" data-act="saveLine" data-id="${l.id}">${T('saveCorr')}</button></div></div>`; }).join('') +
       `<div class="row" style="align-items:flex-end"><label style="flex:1 1 260px">${T('cancelReason')}<input data-k="cancel" value="${esc(A.f.cancel)}"/></label><button class="btn sec" data-act="cancelOrder" data-id="${o.id}">${T('cancelOrder')}</button></div>` : '';
-    return `<div class="card col" style="border-color:var(--deep-blue)"><div class="row between"><div><div class="eyebrow">${T('detail')}</div><h2>${esc(o.number)}</h2></div><button class="lk" data-act="closeOrder">${T('close2')} ✕</button></div>
+    return `<div class="card col"><div class="row between"><div><div class="eyebrow">${T('detail')}</div><h2>${esc(o.number)}</h2></div><button class="lk" data-act="closeOrder">${T('close2')} ✕</button></div>
       <div class="grid"><div><div class="muted">${T('registeredBy')}</div><b>${esc(o.registrant_name)}</b> · ${T({ coord: 'roleCoord', teacher: 'roleTeacher', rep: 'roleRep' }[o.registrant_role])}<div class="muted">${esc(o.registrant_contact)}</div></div><div><div class="muted">${T('registeredAt')}</div><b>${fdt(o.created_at)}</b></div><div><div class="muted">${T('orderPeriod')}</div><b>${esc(pname(p))}</b></div><div><div class="muted">${T('status')}</div><b>${T(o.status === 'preorder' ? 'stPreorder' : o.status === 'active' ? 'stActive' : 'stCancelled')}</b>${editable ? '' : `<div class="err">${T('cancelledInfo')} ${esc(o.cancel_reason)}</div>`}</div></div>
       <div class="scroll"><table><thead><tr><th>${T('teacher')}</th><th>${T('product')}</th><th>${T('color')}</th><th>${T('size')}</th><th class="num">${T('qty')}</th><th class="num">${T('delivered2')}</th><th>${T('pers')}</th></tr></thead><tbody>
       ${ls.map(l => `<tr><td>${esc(D().grp[l.group_id] ? D().grp[l.group_id].teacher : '')}</td><td>${esc(dsc(l))}</td><td>${esc(loc(l.color_name))}</td><td>${esc(szl(l))}</td><td class="num">${l.qty}</td><td class="num">${delq(l.id)}</td><td><b>${l.personalization ? '“' + esc(l.personalization) + '”' : ''}</b></td></tr>`).join('')}</tbody></table></div>${corr}${o.status === 'preorder' ? `<button class="btn" data-act="confirmPreorder" data-id="${o.id}">${T('confirmPreorder')}</button>` : ''}
@@ -426,12 +436,14 @@
   function vReports() {
     const ps = fPeriods(), gopts = [{ v: 'all', l: T('fAll') }, ...(ps.length === 1 ? D().groups.filter(g => g.period_id === ps[0].id).map(g => ({ v: g.id, l: gl(g) })) : [])];
     const preparing = A.rType === 'prepare';
-    const extra = A.rType === 'prodsum' ? `<label>${T('prodStatus')}<select data-s="rStatus" data-re>${opts([{ v: 'all', l: T('sumAll') }, { v: 'preorder', l: T('sumPreorder') }, { v: 'active', l: T('sumActive') }], A.rStatus || 'all')}</select></label>
-      <label style="flex-direction:row;align-items:center;gap:10px;min-height:44px;grid-column:1 / -1"><input type="checkbox" data-s="rByGroup" data-re ${A.rByGroup ? 'checked' : ''}/> <span>${T('byGroup')}</span></label>` : '';
-    const tools = preparing ? `<p class="muted" style="margin:0">${T('prepareHint')}</p>` : `<div class="row"><button class="btn" data-act="print">${T('print')}</button>${A.rType === 'prodsum' ? `<button class="btn sec" data-act="csvProd">${T('downloadCsv')}</button>` : ''}<span class="muted">${A.rType === 'prodsum' ? T('prodSumPrint') : T('printNote')}</span></div>`;
+    const extra = A.more.report ? `<div class="grid"><label>${T('reportLang')}<select data-s="rLang" data-re>${opts([{ v: 'es', l: 'Español' }, { v: 'en', l: 'English' }], A.rLang)}</select></label>
+      <label>${T('paper')}<select data-s="rPaper" data-re>${opts([{ v: 'letter', l: T('letterOpt') }, { v: 'a4', l: 'A4' }], A.rPaper)}</select></label>
+      ${A.rType === 'prodsum' ? `<label>${T('prodStatus')}<select data-s="rStatus" data-re>${opts([{ v: 'all', l: T('sumAll') }, { v: 'preorder', l: T('sumPreorder') }, { v: 'active', l: T('sumActive') }], A.rStatus || 'all')}</select></label>
+      <label style="flex-direction:row;align-items:center;gap:10px;min-height:44px"><input type="checkbox" data-s="rByGroup" data-re ${A.rByGroup ? 'checked' : ''}/> <span>${T('byGroup')}</span></label>` : ''}</div>` : '';
+    const tools = preparing ? `<p class="muted" style="margin:0">${T('prepareHint')}</p>` : `<div class="row"><button class="btn" data-act="print">${T('print')}</button>${A.rType === 'prodsum' ? `<button type="button" class="lk" data-act="csvProd">${T('downloadCsv')}</button>` : ''}<span class="muted">${A.rType === 'prodsum' ? T('prodSumPrint') : T('printNote')}</span></div>`;
     return `<div class="no-print card col"><div class="grid"><label>${T('reportType')}<select data-s="rType" data-re>${opts(['prodsum', 'prepare', 'preorders', 'prep', 'individual', 'delivery', 'production'].map(k => ({ v: k, l: T('r_' + k) })), A.rType)}</select></label>
-      <label>${T('teacher')}<select data-s="rGroup" data-re>${opts(gopts, A.rGroup)}</select></label><label>${T('reportLang')}<select data-s="rLang" data-re>${opts([{ v: 'es', l: 'Español' }, { v: 'en', l: 'English' }], A.rLang)}</select></label>
-      <label>${T('paper')}<select data-s="rPaper" data-re>${opts([{ v: 'letter', l: T('letterOpt') }, { v: 'a4', l: 'A4' }], A.rPaper)}</select></label>${extra}</div>
+      <label>${T('teacher')}<select data-s="rGroup" data-re>${opts(gopts, A.rGroup)}</select></label></div>
+      <button type="button" class="lk" data-act="toggleMore" data-more="report">${A.more.report ? T('lessOpts') : T('moreOpts')}</button>${extra}
       ${A.rType === 'prodsum' ? `<p class="muted" style="margin:0">${T('reportLand')}</p>` : ''}${A.rType === 'production' ? `<p class="warn" style="margin:0">${T('prepOnly')}</p>` : ''}
       ${tools}</div>${preparing ? vProduction() : sheets()}<div class="no-print">${checksBlock()}</div>`;
   }
@@ -480,7 +492,7 @@
     if (!A.ok) { root.innerHTML = `<div class="card col" style="max-width:520px;margin:40px auto"><b class="err">${T('noAccess')}</b><div class="muted">${esc(A.user.email)}</div><button class="btn sec" data-act="logout">${T('logout')}</button></div>`; return; }
     if (!A.D) { root.innerHTML = `<div style="padding:40px;text-align:center" class="muted">${A.toast ? esc(A.toast) : '…'}</div>`; return; }
     const cur = VIEWS.find(v => v[0] === A.view);
-    root.innerHTML = `<div class="shell"><aside class="side no-print"><img src="assets/logo-white.svg" alt="JKINnovations" style="height:56px;width:auto;align-self:flex-start"/><nav>${VIEWS.map(v => `<button class="${A.view === v[0] ? 'on' : ''}" data-act="nav" data-v="${v[0]}">${T(v[1])}</button>`).join('')}</nav><button data-act="logout" style="margin-top:auto;border:1px solid #8aa0b6">${T('logout')}</button></aside>
+    root.innerHTML = `<div class="shell"><aside class="side no-print"><img src="assets/logo-color.svg" alt="JKINnovations" style="height:48px;width:auto;align-self:flex-start"/><nav>${VIEWS.map(v => `<button class="${A.view === v[0] ? 'on' : ''}" data-act="nav" data-v="${v[0]}">${T(v[1])}</button>`).join('')}</nav><button data-act="logout">${T('logout')}</button></aside>
       <main class="main"><div class="no-print row between" style="align-items:flex-end"><div><div class="eyebrow">${T('app')}</div><h1>${T(cur[1])}</h1></div><div class="row" style="gap:6px">${langBtns()}<button class="btn sec sm" data-act="reload">${A.loading ? '…' : T('refresh')}</button></div></div>
       ${filters()}${A.toast ? `<div class="no-print toast">${esc(A.toast)}</div>` : ''}${cur[2]()}</main></div>`;
   }
@@ -492,6 +504,7 @@
     nav: el => { A.view = el.dataset.v; render(); },
     openProdSum: () => { A.view = 'reports'; A.rType = 'prodsum'; A.rStatus = A.rStatus || 'all'; render(); },
     openPending: () => { A.view = 'orders'; A.f.o_status = 'preorder'; A.orderSel = null; render(); const el = document.getElementById('order-list'); if (el) el.scrollIntoView({ block: 'start' }); },
+    toggleMore: el => { A.more[el.dataset.more] = !A.more[el.dataset.more]; render(); },
     setOrderFilter: el => { A.f.o_status = el.dataset.v; A.orderSel = null; render(); const box = document.getElementById('order-list'); if (box) box.scrollIntoView({ block: 'start' }); },
     reload: () => loadAll(), print: () => window.print(),
     csvProd: () => {
@@ -549,7 +562,8 @@
     newSchool: () => { A.schoolForm = 'new'; A.editProd = null; resetLogoPick(); Object.assign(A.f, { sc_name: '', sc_collector: '', sc_contact: '', sc_logo: '', sc_open: todayLA(), sc_close: '', sc_mode: 'mixed', sc_groups_text: '' }); render(); },
     editSchool: el => { const s = D().sch[el.dataset.id]; A.schoolForm = s.id; resetLogoPick(); Object.assign(A.f, { sc_name: s.name, sc_collector: s.collector, sc_contact: s.contact, sc_logo: s.logo_path || '' }); render(); },
     cancelSchool: () => { A.schoolForm = null; resetLogoPick(); render(); },
-    clearLogo: () => { if (A.logoBusy) return; revokeLogoPreview(); A.logoFile = null; A.f.sc_logo = ''; A.logoErr = ''; render(); },
+    toggleLogo: () => { if (A.logoBusy) return; A.logoOpen = true; render(); const box = document.getElementById('logo-editor'); if (box) box.scrollIntoView({ block: 'nearest' }); },
+    clearLogo: () => { if (A.logoBusy) return; revokeLogoPreview(); A.logoFile = null; A.f.sc_logo = ''; A.logoErr = ''; A.logoOpen = true; render(); },
     saveSchool: async () => {
       if (A.logoBusy) return;
       const f = A.f; if (!(f.sc_name || '').trim()) return toast(T('msgSchoolInvalid'));

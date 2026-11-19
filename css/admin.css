@@ -1,0 +1,90 @@
+/* Panel only. The public form does not load this file. */
+body.admin{
+  background:#fff;
+  color:#172033;
+  font-size:15px;
+  line-height:1.5;
+}
+body.admin h1{font-size:32px;font-weight:600;letter-spacing:-.03em;color:#172033}
+body.admin h2{font-size:20px;font-weight:600;letter-spacing:-.02em;color:#172033}
+body.admin h3{font-size:15px;font-weight:600;color:#172033}
+body.admin .shell{background:#fff;gap:0}
+body.admin .side{
+  flex:0 0 196px;max-width:220px;background:#fff;color:#274969;
+  border-right:1px solid #e7eaee;box-shadow:none;padding:28px 16px 20px;gap:28px
+}
+body.admin .side button{
+  color:#3d4d63;background:transparent;border:0;border-radius:6px;
+  font-weight:600;font-size:15px;text-align:left;padding:10px 12px;min-height:44px
+}
+body.admin .side button.on{background:#f2f5f8;color:#172033}
+body.admin .side button[data-act="logout"]{color:#6b7280;font-weight:600}
+body.admin .main{padding:36px 40px 64px;gap:32px;background:#fff}
+body.admin .card{
+  background:transparent;border:0;border-radius:0;box-shadow:none;padding:0
+}
+body.admin .col{gap:20px}
+body.admin .row{gap:12px}
+body.admin .stack{padding:4px 0 8px}
+body.admin .note{padding:0}
+body.admin .callout{padding:4px 0 8px}
+body.admin .card [style*="border:1px solid"]{border:0!important;border-radius:0!important;background:transparent!important}
+body.admin .stat{font-size:40px;font-weight:600;letter-spacing:-.04em;color:#172033;line-height:1}
+body.admin .eyebrow{color:#6b7280;letter-spacing:.14em;font-size:11px;font-weight:600}
+body.admin .muted{color:#6b7280;font-size:13px;font-weight:500}
+body.admin label{font-size:12px;font-weight:600;color:#5c6b7a;gap:6px}
+body.admin input,body.admin select,body.admin textarea{
+  border:1px solid #d9dee6;border-radius:6px;background:#fff;box-shadow:none;
+  min-height:44px;padding:10px 12px
+}
+body.admin input:focus,body.admin select:focus,body.admin button:focus-visible{
+  outline:2px solid #274969;outline-offset:1px
+}
+body.admin .btn{
+  background:#274969;color:#fff;border:0;border-radius:6px;box-shadow:none;
+  font-weight:600;padding:10px 18px;min-height:44px
+}
+body.admin .btn:hover{background:#1c334d}
+body.admin .btn.sec,body.admin .btn.ghost{
+  background:transparent;color:#274969;border:0;padding:10px 4px;font-weight:600
+}
+body.admin .btn.sec:hover,body.admin .btn.ghost:hover{background:transparent;color:#172033;text-decoration:underline}
+body.admin .btn.sm{min-height:40px;padding:8px 12px;font-size:14px}
+body.admin #order-filters .btn.sec{color:#5c6b7a;padding:10px 12px}
+body.admin #order-filters .btn:not(.sec){background:#274969;color:#fff;text-decoration:none}
+body.admin .lk{color:#274969;font-weight:600;min-height:44px;padding:10px 2px;align-self:flex-start;width:auto;text-align:left}
+body.admin .lk:hover{color:#172033}
+body.admin label.filebtn{
+  width:auto;min-height:44px;border:1px solid #274969;border-radius:6px;
+  background:#fff;color:#274969;padding:10px 16px;font-weight:600
+}
+body.admin .lang{
+  border:0;background:transparent;color:#5c6b7a;border-radius:6px;min-height:36px;font-weight:600
+}
+body.admin .lang.on{background:#274969;color:#fff}
+body.admin table{font-size:14px}
+body.admin th{
+  font-size:11px;letter-spacing:.06em;color:#6b7280;font-weight:600;
+  padding:8px 10px 10px;border-bottom:1px solid #e7eaee
+}
+body.admin td{padding:16px 10px;border-bottom:1px solid #eef0f3;vertical-align:middle}
+body.admin .badge{border-radius:6px;letter-spacing:.06em;background:#f2f5f8;color:#274969}
+body.admin .badge.blue{background:#274969;color:#fff}
+body.admin .badge.light{background:#e7eef5;color:#274969}
+body.admin .badge.red{background:#f8e8e6;color:#9a4a3c}
+body.admin .toast{background:#172033;border-radius:6px;box-shadow:none}
+body.admin .logo-mini{border-radius:6px;border-color:#e7eaee}
+body.admin .logo-preview{border-radius:6px;border-color:#e7eaee}
+body.admin .sheet{border:1px solid #e7eaee;border-radius:0;box-shadow:none}
+@media (max-width:800px){
+  body.admin .side{flex:1 1 100%;max-width:none;border-right:0;border-bottom:1px solid #e7eaee;padding:16px}
+  body.admin .side nav{grid-template-columns:repeat(3,minmax(0,1fr))}
+  body.admin .side nav button{text-align:center;padding:12px 6px}
+  body.admin .main{padding:24px 16px 48px;gap:28px}
+  body.admin h1{font-size:28px}
+  body.admin .stat{font-size:34px}
+}
+@media print{
+  body.admin,body.admin .main,body.admin .shell{background:#fff!important}
+  body.admin .sheet{border:0}
+}
