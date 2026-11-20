@@ -1,9 +1,9 @@
 // Panel privado de Norma. La protección real está en el servidor (Supabase Auth + RLS + funciones admin_*).
 (function () {
-  const { T, esc, money, loc, fd, fdt, szl, dsc } = JK;
+  const { T, esc, money, loc, fd, fdt, szl, dsc, logoSrc } = JK;
   const root = document.getElementById('app');
-  const A = { user: null, ok: false, msg: '', D: null, loading: false, view: 'reports', fSchool: 'all', fPeriod: 'all', orderSel: null, delSel: null, cfg: null, newFor: null, schoolForm: null, editProd: null,
-    toast: '', rType: 'prodsum', rGroup: 'all', rLang: JK.lang, rPaper: 'letter', rStatus: 'all', rByGroup: false, gate: '', recovery: false, showPass: false, sending: false, authReady: false, f: {}, pq: {}, eq: {}, dq: {}, pf: {}, zoom: '' };
+  const A = { user: null, ok: false, msg: '', D: null, loading: false, view: 'schools', fSchool: 'all', fPeriod: 'all', orderSel: null, delSel: null, cfg: null, newFor: null, schoolForm: null, editProd: null,
+    toast: '', rType: 'prodsum', rGroup: 'all', rLang: JK.lang, rPaper: 'letter', rStatus: 'all', rByGroup: false, gate: '', recovery: false, showPass: false, sending: false, authReady: false, f: {}, pq: {}, eq: {}, dq: {}, pf: {}, zoom: '', more: {} };
   const sb = () => JK.sb();
   const recoveryFromHash = () => { const raw = (location.hash || '').replace(/^#/, ''); return !!raw && new URLSearchParams(raw).get('type') === 'recovery'; };
   const markRecovery = () => { A.recovery = true; try { sessionStorage.setItem('jk_pw_recovery', '1'); } catch (e) {} };
@@ -109,6 +109,54 @@
     Object.assign(A.f, { pr_es: '', pr_en: '', pr_cat: 'school', pr_colors: '', pr_child: '', pr_adult: '', pr_price: '', pr_design: '', pr_pers: 'none', pr_photo: '', pr_code: '', pr_mes: '', pr_men: '', pr_more: '', pr_map: '' });
   }
   const publicUrl = p => new URL('index.html', location.href).href + '?p=' + p.slug;
+  const LOGO_BUCKET = 'school-logos';
+  const LOGO_MAX = 2 * 1024 * 1024;
+  const LOGO_TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/webp': 'webp', 'image/svg+xml': 'svg' };
+  const logoKind = file => {
+    const t = (file && file.type || '').toLowerCase();
+    if (LOGO_TYPES[t]) return { mime: t === 'image/jpg' ? 'image/jpeg' : t, ext: LOGO_TYPES[t] };
+    const m = !t && String(file && file.name || '').toLowerCase().match(/\.(png|jpe?g|webp|svg)$/);
+    const ext = m && (m[1] === 'jpeg' ? 'jpg' : m[1]);
+    const mime = { png: 'image/png', jpg: 'image/jpeg', webp: 'image/webp', svg: 'image/svg+xml' }[ext];
+    return mime ? { mime, ext } : null;
+  };
+  const revokeLogoPreview = () => { if (A.logoPreview) { try { URL.revokeObjectURL(A.logoPreview); } catch (e) {} A.logoPreview = ''; } };
+  const resetLogoPick = () => { revokeLogoPreview(); A.logoFile = null; A.logoErr = ''; A.logoBusy = false; A.logoOpen = false; };
+  const storageErrText = error => !error ? '' : typeof error === 'string' ? error : [error.message, error.error, error.statusCode, error.status].filter(Boolean).join(' ');
+  const storageKeyFromLogo = value => {
+    const s = String(value || '');
+    const marker = '/storage/v1/object/public/' + LOGO_BUCKET + '/';
+    const at = s.indexOf(marker);
+    let key = at >= 0 ? s.slice(at + marker.length).split('?')[0] : s;
+    try { key = decodeURIComponent(key); } catch (e) { return ''; }
+    return /^[0-9a-f-]{36}\.(png|jpg|webp|svg)$/i.test(key) ? key : '';
+  };
+  async function removeStoredLogo(value) {
+    const key = storageKeyFromLogo(value);
+    if (!key) return;
+    try { await sb().storage.from(LOGO_BUCKET).remove([key]); } catch (e) {}
+  }
+  async function uploadSchoolLogo(file) {
+    const kind = logoKind(file);
+    if (!kind || !file.size) { A.logoErr = T('logoType'); toast(A.logoErr); return ''; }
+    if (file.size > LOGO_MAX) { A.logoErr = T('logoSize'); toast(A.logoErr); return ''; }
+    const path = JK.uuid() + '.' + kind.ext;
+    const body = (file.type || '').toLowerCase() === kind.mime ? file : new Blob([await file.arrayBuffer()], { type: kind.mime });
+    const { data, error } = await sb().storage.from(LOGO_BUCKET).upload(path, body, { contentType: kind.mime, cacheControl: '3600', upsert: false });
+    if (error) {
+      const raw = storageErrText(error);
+      A.logoErr = /bucket|not found|row-level|policy|violates|42501|\b403\b/i.test(raw) ? T('logoNeedSql') : T('logoUpload');
+      toast(A.logoErr);
+      return '';
+    }
+    const pub = sb().storage.from(LOGO_BUCKET).getPublicUrl((data && data.path) || path);
+    const url = pub && pub.data && pub.data.publicUrl;
+    if (!url || url.length > 300) {
+      try { await sb().storage.from(LOGO_BUCKET).remove([path]); } catch (e) {}
+      A.logoErr = T('logoUpload'); toast(A.logoErr); return '';
+    }
+    return url;
+  }
 
   // ---- validaciones previas a abrir (el servidor las repite) ----
   function validate(p) {
@@ -124,36 +172,53 @@
     return `<div class="no-print card row" style="gap:14px;padding:14px 18px"><label style="flex:1 1 200px">${T('school')}<select data-s="fSchool" data-re data-clr="fPeriod">${opts([{ v: 'all', l: T('fAll') }, ...D().schools.map(s => ({ v: s.id, l: s.name }))], A.fSchool)}</select></label>
       <label style="flex:1 1 240px">${T('orderPeriod')}<select data-s="fPeriod" data-re>${opts([{ v: 'all', l: T('fAll') }, ...ps.map(p => ({ v: p.id, l: (A.fSchool === 'all' ? D().sch[p.school_id].name + ' · ' : '') + rng(p) }))], A.fPeriod)}</select></label></div>`;
   }
-  function vSummary() {
-    const st = fPeriods().map(p => ({ p, pre: pieceQty(p.id, 'preorder'), x: stat(p) }));
-    const tot = { pre: 0, conf: 0, d: 0, p: 0 }; st.forEach(({ pre, x }) => { tot.pre += pre; tot.conf += x.ordered; tot.d += x.delivered; tot.p += x.pending; });
+  function periodStats() {
+    return fPeriods().map(p => ({ p, pre: pieceQty(p.id, 'preorder'), preN: D().orders.filter(o => o.period_id === p.id && o.status === 'preorder').length, x: stat(p) }));
+  }
+  function summaryHead() {
+    const st = periodStats();
+    const tot = { pre: 0, preN: 0, conf: 0, d: 0, p: 0 }; st.forEach(({ pre, preN, x }) => { tot.pre += pre; tot.preN += preN; tot.conf += x.ordered; tot.d += x.delivered; tot.p += x.pending; });
+    const pendingCard = `<div class="card col callout" id="pending-review"><div class="row between" style="align-items:flex-end"><div><div class="eyebrow">${T('pendingReview')}</div><div class="row" style="align-items:flex-end;gap:28px"><div><div class="stat" data-pending-orders>${tot.preN}</div><div class="muted">${T('pendingReviewOrders')}</div></div><div><div class="stat" data-pending-pieces>${tot.pre}</div><div class="muted">${T('pendingReviewPieces')}</div></div></div></div><button class="btn" data-act="openPending">${T('reviewPending')}</button></div></div>`;
     const stats = [['prePieces', tot.pre], ['confPieces', tot.conf], ['delivered', tot.d], ['pending', tot.p]].map(([k, v]) => `<div class="card"><div class="stat">${v}</div><div class="muted">${T(k)}</div></div>`).join('');
-    const checks = st.map(({ p, pre, x }) => { const a = x.ordered, b = prodRows(p.id).reduce((q, r) => q + r.ordered, 0), c = D().groups.filter(g => g.period_id === p.id).reduce((q, g) => q + act(p.id).filter(l => l.group_id === g.id).reduce((z, l) => z + l.qty, 0), 0), d = x.delivered + x.pending, ok = a === b && b === c && c === d, waiting = a === 0 && pre > 0;
+    const bySchool = `<div class="card scroll"><h3 style="margin-bottom:10px">${T('bySchool')}</h3><table><thead><tr><th>${T('school')}</th><th class="num">${T('pendingPrePieces')}</th><th class="num">${T('confPieces')}</th><th class="num">${T('pendingShort')}</th></tr></thead><tbody>
+      ${st.map(({ p, pre, x }) => `<tr><td><b>${esc(D().sch[p.school_id].name)}</b><div class="muted">${rng(p)}</div></td><td class="num"><b data-pre-pieces>${pre}</b></td><td class="num">${x.ordered}</td><td class="num">${x.pending}</td></tr>`).join('')}</tbody></table></div>`;
+    return `${pendingCard}<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">${stats}</div>
+      <div class="row between"><div class="muted">${T('homeCountNote')}</div><button class="btn" data-act="openProdSum">${T('openProdSum')}</button></div>${bySchool}`;
+  }
+  function checksBlock() {
+    const checks = periodStats().map(({ p, pre, x }) => { const a = x.ordered, b = prodRows(p.id).reduce((q, r) => q + r.ordered, 0), c = D().groups.filter(g => g.period_id === p.id).reduce((q, g) => q + act(p.id).filter(l => l.group_id === g.id).reduce((z, l) => z + l.qty, 0), 0), d = x.delivered + x.pending, ok = a === b && b === c && c === d, waiting = a === 0 && pre > 0;
       return `<tr><td>${esc(pname(p))}</td><td class="num">${a}</td><td class="num">${b}</td><td class="num">${c}</td><td class="num">${d}</td><td><b style="color:${waiting ? '#8A5A00' : ok ? '#2E6B4A' : '#B3261E'}">${waiting ? T('preOnly') : ok ? T('okTxt') : T('badTxt')}</b></td></tr>`; }).join('');
-    return `<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">${stats}</div>
-      <div class="row between"><div class="muted">${T('homeCountNote')}</div><button class="btn sm" data-act="openProdSum">${T('openProdSum')}</button></div>
-      <div class="card scroll"><h3 style="margin-bottom:10px">${T('nSchools')}</h3><table><thead><tr><th>${T('school')}</th><th>${T('orderPeriod')}</th><th>${T('status')}</th><th class="num">${T('prePieces')}</th><th class="num">${T('confPieces')}</th><th class="num">${T('delivered')}</th><th class="num">${T('pendingShort')}</th></tr></thead><tbody>
-      ${st.map(({ p, pre, x }) => `<tr><td>${esc(D().sch[p.school_id].name)}</td><td>${rng(p)}</td><td>${stl(p)}</td><td class="num"><b>${pre}</b></td><td class="num">${x.ordered}</td><td class="num">${x.delivered}</td><td class="num">${x.pending}</td></tr>`).join('')}</tbody></table></div>
-      <div class="card scroll"><h3>${T('checks')}</h3><div class="muted" style="margin-bottom:10px">${T('checksNote')}</div><table><thead><tr><th>${T('orderPeriod')}</th><th class="num">${T('cOrders')}</th><th class="num">${T('cProd')}</th><th class="num">${T('cPack')}</th><th class="num">${T('cDel')}</th><th></th></tr></thead><tbody>${checks}</tbody></table></div>`;
+    return `<div class="card scroll" id="checks"><h3>${T('checks')}</h3><div class="muted" style="margin-bottom:10px">${T('checksNote')}</div><table><thead><tr><th>${T('orderPeriod')}</th><th class="num">${T('cOrders')}</th><th class="num">${T('cProd')}</th><th class="num">${T('cPack')}</th><th class="num">${T('cDel')}</th><th></th></tr></thead><tbody>${checks}</tbody></table></div>`;
   }
   function vSchools() {
     const sf = A.schoolForm, f = A.f;
-    const fresh = sf === 'new' ? `<h3>${T('schoolDates')}</h3><div class="grid"><label>${T('openFrom')}<input type="date" data-k="sc_open" value="${esc(f.sc_open)}"/></label><label>${T('openUntil')}<input type="date" data-k="sc_close" value="${esc(f.sc_close)}"/></label>
-        <label>${T('mode')}<select data-k="sc_mode">${opts([{ v: 'coord', l: T('mCoord') }, { v: 'each', l: T('mEach') }, { v: 'mixed', l: T('mMixed') }], f.sc_mode || 'mixed')}</select></label></div>
-        <label>${T('groupLines')}<textarea data-k="sc_groups_text" rows="4" placeholder="Anciso | KN&#10;Bessolo | KN">${esc(f.sc_groups_text || '')}</textarea></label><div class="muted">${T('groupHint')}</div>` : '';
-    const form = sf ? `<div style="border:1px solid var(--line);border-radius:12px;padding:16px;background:var(--paper)" class="col"><h3>${sf === 'new' ? T('addSchool') : T('editSchool')}</h3><div class="muted">${sf === 'new' ? T('schoolSetup') : ''}</div>
-      <div class="grid"><label>${T('name')}<input data-k="sc_name" value="${esc(f.sc_name)}"/></label><label>${T('collector')}<input data-k="sc_collector" value="${esc(f.sc_collector)}"/></label><label>${T('contactData')}<input data-k="sc_contact" value="${esc(f.sc_contact)}"/></label><label>${T('logoFile')}<input data-k="sc_logo" value="${esc(f.sc_logo)}" placeholder="assets/img/school-harder.png"/></label></div>
-      <div class="muted">${T('logoSlot')}</div>${fresh}<div class="row"><button class="btn" data-act="saveSchool">${T('save')}</button><button class="btn ghost" data-act="cancelSchool">${T('cancel')}</button></div></div>` : '';
+    const fresh = sf === 'new' ? `<h3>${T('schoolDates')}</h3><div class="grid"><label>${T('openFrom')}<input type="date" data-k="sc_open" value="${esc(f.sc_open)}"/></label><label>${T('openUntil')}<input type="date" data-k="sc_close" value="${esc(f.sc_close)}"/></label></div>
+        <label>${T('groupLines')}<textarea data-k="sc_groups_text" rows="4" placeholder="Anciso | KN&#10;Bessolo | KN">${esc(f.sc_groups_text || '')}</textarea></label><div class="muted">${T('groupHint')}</div>
+        <button type="button" class="lk" data-act="toggleMore" data-more="newSchool">${A.more.newSchool ? T('lessOpts') : T('moreOpts')}</button>
+        ${A.more.newSchool ? `<label>${T('mode')}<select data-k="sc_mode">${opts([{ v: 'coord', l: T('mCoord') }, { v: 'each', l: T('mEach') }, { v: 'mixed', l: T('mMixed') }], f.sc_mode || 'mixed')}</select></label>` : ''}` : '';
+    const savedLogo = logoSrc(f.sc_logo);
+    const previewSrc = A.logoPreview || savedLogo;
+    const hasLogo = !!(A.logoFile || (f.sc_logo || '').trim() || previewSrc);
+    const logoOpen = `<div class="col" id="logo-editor" style="gap:8px"><span style="font-size:13px;font-weight:600">${T('logoFile')}</span>
+      <div class="row" style="align-items:center">${previewSrc ? `<img class="logo-preview" src="${esc(previewSrc)}" alt="${esc(T('logoPreview'))}"/>` : ''}
+        <label class="btn sec filebtn">${T('uploadLogo')}<input class="filepick" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml,.png,.jpg,.jpeg,.webp,.svg" data-logo aria-label="${esc(T('uploadLogo'))}" ${A.logoBusy ? 'disabled' : ''}/></label>
+        ${hasLogo ? `<button type="button" class="lk" data-act="clearLogo" ${A.logoBusy ? 'disabled' : ''}>${T('remove')}</button>` : ''}</div>
+      <div class="muted">${T('logoSlot')}</div>${A.logoErr ? `<div class="err" role="alert">${esc(A.logoErr)}</div>` : ''}</div>`;
+    const logoClosed = `<div class="row" id="logo-toggle" style="align-items:center">${savedLogo ? `<img class="logo-mini" src="${esc(savedLogo)}" alt="${esc(T('logoPreview'))}"/>` : ''}<button type="button" class="lk" data-act="toggleLogo" style="min-height:44px">${savedLogo ? T('changeLogo') : T('addLogo')}</button></div>`;
+    const logoBox = A.logoOpen || A.logoBusy ? logoOpen : logoClosed;
+    const form = sf ? `<div class="stack col"><h3>${sf === 'new' ? T('addSchool') : T('editSchool')}</h3><div class="muted">${sf === 'new' ? T('schoolSetup') : ''}</div>
+      <div class="grid"><label>${T('name')}<input data-k="sc_name" value="${esc(f.sc_name)}"/></label><label>${T('collector')}<input data-k="sc_collector" value="${esc(f.sc_collector)}"/></label><label>${T('contactData')}<input data-k="sc_contact" value="${esc(f.sc_contact)}"/></label></div>
+      ${logoBox}${fresh}<div class="row"><button class="btn" data-act="saveSchool" ${A.logoBusy ? 'disabled' : ''}>${A.logoBusy ? T('uploadingLogo') : T('save')}</button><button type="button" class="lk" data-act="cancelSchool" ${A.logoBusy ? 'disabled' : ''}>${T('cancel')}</button></div></div>` : '';
     const schools = `<div class="card col"><div class="row between"><h2>${T('nSchoolsOnly')}</h2><button class="btn" data-act="newSchool">+ ${T('addSchool')}</button></div>${form}<div class="scroll"><table><thead><tr><th>${T('name')}</th><th>${T('collector')}</th><th>${T('contactData')}</th><th></th></tr></thead><tbody>
-      ${D().schools.map(s => `<tr><td><b>${esc(s.name)}</b></td><td>${esc(s.collector)}</td><td>${esc(s.contact)}</td><td><button class="btn ghost sm" data-act="editSchool" data-id="${s.id}">${T('edit')}</button></td></tr>`).join('')}</tbody></table></div></div>`;
+      ${D().schools.map(s => `<tr><td><b>${esc(s.name)}</b></td><td>${esc(s.collector)}</td><td>${esc(s.contact)}</td><td><button type="button" class="lk" data-act="editSchool" data-id="${s.id}">${T('edit')}</button></td></tr>`).join('')}</tbody></table></div></div>`;
     const blocks = D().schools.filter(s => A.fSchool === 'all' || s.id === A.fSchool).map(s => {
-      const nf = A.newFor === s.id ? `<div style="border:1px solid var(--line);border-radius:12px;padding:16px;background:var(--paper)" class="col"><h3>${T('newPeriod')}</h3><div class="grid"><label>${T('openFrom')}<input type="date" data-k="np_open" value="${esc(f.np_open)}"/></label><label>${T('openUntil')}<input type="date" data-k="np_close" value="${esc(f.np_close)}"/></label>
+      const nf = A.newFor === s.id ? `<div class="stack col"><h3>${T('newPeriod')}</h3><div class="grid"><label>${T('openFrom')}<input type="date" data-k="np_open" value="${esc(f.np_open)}"/></label><label>${T('openUntil')}<input type="date" data-k="np_close" value="${esc(f.np_close)}"/></label>
         <label>${T('mode')}<select data-k="np_mode">${opts([{ v: 'coord', l: T('mCoord') }, { v: 'each', l: T('mEach') }, { v: 'mixed', l: T('mMixed') }], f.np_mode || 'mixed')}</select></label></div><div class="muted">${T('copyNote')}</div>
         <div class="row"><button class="btn" data-act="createPeriod" data-id="${s.id}">${T('create')}</button><button class="btn ghost" data-act="cancelNew">${T('cancel')}</button></div></div>` : '';
       return `<div class="card col"><div class="row between"><h2>${esc(s.name)}</h2><button class="btn sm" data-act="newPeriod" data-id="${s.id}">+ ${T('newPeriod')}</button></div>${nf}<div class="scroll"><table><thead><tr><th>${T('dates')}</th><th>${T('mode')}</th><th>${T('status')}</th><th>${T('publicLink')}</th><th></th></tr></thead><tbody>
         ${D().periods.filter(p => p.school_id === s.id).map(p => `<tr><td><b>${rng(p)}</b></td><td>${T(p.mode === 'mixed' ? 'mMixed' : p.mode === 'coord' ? 'mCoord' : 'mEach')}</td>
         <td><div class="row" style="gap:8px"><select data-act="setStatus" data-id="${p.id}" style="width:200px">${opts([{ v: 'pending', l: T('stPending') }, { v: 'open', l: T('stOpen') }, { v: 'closed', l: T('stClosed') }], p.status)}</select><span class="muted">${stl(p)}</span></div></td>
-        <td><button class="lk" data-act="copyLink" data-id="${p.id}">${T('copyLink')}</button><div class="muted">?p=${esc(p.slug)}</div></td><td><button class="btn sec sm" data-act="cfg" data-id="${p.id}">${T('configure')}</button></td></tr>`).join('')}</tbody></table></div></div>`;
+        <td><button class="lk" data-act="copyLink" data-id="${p.id}">${T('copyLink')}</button><div class="muted">?p=${esc(p.slug)}</div></td><td><button type="button" class="lk" data-act="cfg" data-id="${p.id}">${T('configure')}</button></td></tr>`).join('')}</tbody></table></div></div>`;
     }).join('');
     return schools + blocks + cfgPanel();
   }
@@ -166,8 +231,8 @@
       <td style="font-size:13px">${esc(x.colors.map(c => loc(c)).join(', '))}<div style="margin-top:6px;grid-template-columns:1fr 1fr" class="grid"><label>${T('youth')}<input data-m="pf" data-k="${x.id}:child" value="${esc(pfv(x, 'child', (x.sizes.child || []).join(', ')))}"/></label><label>${T('adultW')}<input data-m="pf" data-k="${x.id}:adult" value="${esc(pfv(x, 'adult', (x.sizes.adult || []).join(', ')))}"/></label></div></td>
       <td><div class="col" style="gap:6px"><label>${T('refPrice')}<input class="sm" data-m="pf" data-k="${x.id}:price" value="${esc(pfv(x, 'price', x.base_price == null ? '' : x.base_price))}" inputmode="decimal"/></label><label>${T('priceMapLbl')}<input data-m="pf" data-k="${x.id}:map" value="${esc(pfv(x, 'map', map))}" placeholder="2XL:14, 3XL:16"/></label><button class="btn sec sm" data-act="saveProduct" data-id="${x.id}">${T('save')}</button></div></td>
       <td><input type="checkbox" data-act="toggleProduct" data-id="${x.id}" ${x.enabled ? 'checked' : ''}/></td></tr>`; }).join('');
-    return `<div class="card col" style="border-color:var(--deep-blue)"><div class="row between"><div><div class="eyebrow">${T('configure')}</div><h2>${esc(pname(p))}</h2></div><button class="lk" data-act="closeCfg">${T('close2')} ✕</button></div>
-      <div style="background:var(--paper);border-radius:12px;padding:12px 16px" class="col"><b>${T('validation')}</b>${v.e.length ? '' : `<div class="ok">${T('validOk')}</div>`}${v.e.map(t => `<div class="err">• ${esc(t)}</div>`).join('')}${v.w.map(t => `<div class="warn">• ${esc(t)}</div>`).join('')}</div>
+    return `<div class="card col"><div class="row between"><div><div class="eyebrow">${T('configure')}</div><h2>${esc(pname(p))}</h2></div><button class="lk" data-act="closeCfg">${T('close2')} ✕</button></div>
+      <div class="note col"><b>${T('validation')}</b>${v.e.length ? '' : `<div class="ok">${T('validOk')}</div>`}${v.e.map(t => `<div class="err">• ${esc(t)}</div>`).join('')}${v.w.map(t => `<div class="warn">• ${esc(t)}</div>`).join('')}</div>
       <div class="col" style="gap:6px"><b>${T('publicLink')}</b><input readonly value="${esc(publicUrl(p))}" onclick="this.select()"/></div>
       <h3>${T('editDates')}</h3><div class="grid"><label>${T('openFrom')}<input type="date" data-k="ed_open" value="${esc(f.ed_open)}"/></label><label>${T('openUntil')}<input type="date" data-k="ed_close" value="${esc(f.ed_close)}"/></label></div>
       <div class="row"><button class="btn sec sm" data-act="saveDates">${T('saveDates')}</button></div>${log.length ? `<div class="muted"><b>${T('dateLog')}</b>${log.map(h => `<div>${fdt(h.at)} · ${esc(h.by_email || '')} · ${esc(h.detail)}</div>`).join('')}</div>` : ''}
@@ -178,26 +243,37 @@
   }
   function garmentForm(f) {
     const editing = !!A.editProd;
-    return `<div id="garment-form" style="border:1px solid var(--line);border-radius:12px;padding:16px;background:var(--paper)" class="col"><h3>${editing ? T('editGarment') : T('addProduct')}</h3><div class="grid">
-        <label>${T('nameEs')}<input data-k="pr_es" value="${esc(f.pr_es)}"/></label><label>${T('nameEn')}<input data-k="pr_en" value="${esc(f.pr_en)}"/></label>
-        <label>${T('category')}<select data-k="pr_cat">${opts([{ v: 'school', l: T('catSchool') }, { v: 'staff', l: T('catStaff') }], f.pr_cat || 'school')}</select></label>
-        <label>${T('modelCode')}<input data-k="pr_code" value="${esc(f.pr_code)}" placeholder="ST941"/></label><label>${T('modelEs')}<input data-k="pr_mes" value="${esc(f.pr_mes)}"/></label><label>${T('modelEn')}<input data-k="pr_men" value="${esc(f.pr_men)}"/></label>
-        <label>${T('colorsCsv')}<input data-k="pr_colors" value="${esc(f.pr_colors)}" placeholder="Negro / Black, Granate / Maroon"/></label><label>${T('childCsv')}<input data-k="pr_child" value="${esc(f.pr_child)}" placeholder="XS, S, M, L, XL"/></label><label>${T('adultCsv')}<input data-k="pr_adult" value="${esc(f.pr_adult)}" placeholder="S, M, L, XL, 2XL"/></label>
-        <label>${T('refPrice')}<input data-k="pr_price" value="${esc(f.pr_price)}" inputmode="decimal"/></label><label>${T('priceMapLbl')}<input data-k="pr_map" value="${esc(f.pr_map)}" placeholder="2XL:14, 3XL:16"/></label><label>${T('design')}<input data-k="pr_design" value="${esc(f.pr_design)}"/></label>
+    const extra = A.more.garment ? `<div class="grid">
+        <label>${T('modelEs')}<input data-k="pr_mes" value="${esc(f.pr_mes)}"/></label><label>${T('modelEn')}<input data-k="pr_men" value="${esc(f.pr_men)}"/></label>
+        <label>${T('priceMapLbl')}<input data-k="pr_map" value="${esc(f.pr_map)}" placeholder="2XL:14, 3XL:16"/></label><label>${T('design')}<input data-k="pr_design" value="${esc(f.pr_design)}"/></label>
         <label>${T('photoPath')}<input data-k="pr_photo" value="${esc(f.pr_photo)}" placeholder="assets/img/sleeve-black.jpg"/></label>
         <label>${T('pers')}<select data-k="pr_pers">${opts([{ v: 'none', l: T('pNone') }, { v: 'name', l: T('pName') }, { v: 'nameNumber', l: T('pNameNum') }], f.pr_pers || 'none')}</select></label></div>
         <label>${T('moreModels')}<textarea data-k="pr_more" rows="3" placeholder="ST941 | Hombre | Men">${esc(f.pr_more || '')}</textarea></label>
-        <div class="muted">${T('colorsHint')} ${T('photoSlot')}</div><div class="row"><button class="btn" data-act="addProduct">${editing ? T('save') : '+ ' + T('addProduct')}</button>${editing ? `<button class="btn ghost" data-act="cancelGarment">${T('cancel')}</button>` : ''}</div></div>`;
+        <div class="muted">${T('photoSlot')}</div>` : '';
+    return `<div id="garment-form" class="stack col"><h3>${editing ? T('editGarment') : T('addProduct')}</h3><div class="grid">
+        <label>${T('nameEs')}<input data-k="pr_es" value="${esc(f.pr_es)}"/></label><label>${T('nameEn')}<input data-k="pr_en" value="${esc(f.pr_en)}"/></label>
+        <label>${T('category')}<select data-k="pr_cat">${opts([{ v: 'school', l: T('catSchool') }, { v: 'staff', l: T('catStaff') }], f.pr_cat || 'school')}</select></label>
+        <label>${T('modelCode')}<input data-k="pr_code" value="${esc(f.pr_code)}" placeholder="ST941"/></label>
+        <label>${T('colorsCsv')}<input data-k="pr_colors" value="${esc(f.pr_colors)}" placeholder="Negro / Black, Granate / Maroon"/></label><label>${T('childCsv')}<input data-k="pr_child" value="${esc(f.pr_child)}" placeholder="XS, S, M, L, XL"/></label><label>${T('adultCsv')}<input data-k="pr_adult" value="${esc(f.pr_adult)}" placeholder="S, M, L, XL, 2XL"/></label>
+        <label>${T('refPrice')}<input data-k="pr_price" value="${esc(f.pr_price)}" inputmode="decimal"/></label></div>
+        <div class="muted">${T('colorsHint')}</div>
+        <button type="button" class="lk" data-act="toggleMore" data-more="garment">${A.more.garment ? T('lessOpts') : T('moreOpts')}</button>${extra}
+        <div class="row"><button class="btn" data-act="addProduct">${editing ? T('save') : '+ ' + T('addProduct')}</button>${editing ? `<button type="button" class="lk" data-act="cancelGarment">${T('cancel')}</button>` : ''}</div></div>`;
   }
 
   function vOrders() {
-    const ids = fPeriods().map(p => p.id), g = A.f.o_group || 'all';
+    const ids = fPeriods().map(p => p.id), g = A.f.o_group || 'all', status = A.f.o_status || 'all';
     const sig = o => o.period_id + '|' + o.registrant_name.toLowerCase() + '|' + D().lines.filter(l => l.order_id === o.id).map(l => [l.group_id, l.variant_key, l.qty, l.personalization].join(':')).sort().join(',');
     const sigs = {}; D().orders.filter(o => o.status === 'active').forEach(o => { const k = sig(o); sigs[k] = (sigs[k] || 0) + 1; });
-    const rows = D().orders.filter(o => ids.includes(o.period_id) && (g === 'all' || D().lines.some(l => l.order_id === o.id && l.group_id === g))).sort((a, b) => b.created_at.localeCompare(a.created_at));
+    const rows = D().orders.filter(o => ids.includes(o.period_id) && (status === 'all' || o.status === status) && (g === 'all' || D().lines.some(l => l.order_id === o.id && l.group_id === g))).sort((a, b) => b.created_at.localeCompare(a.created_at));
     const gopts = [{ v: 'all', l: T('fAll') }, ...fPeriods().flatMap(p => D().groups.filter(x => x.period_id === p.id).map(x => ({ v: x.id, l: (fPeriods().length > 1 ? rng(p) + ' · ' : '') + gl(x) })))];
-    return `<div class="card col"><div class="row between"><h3>${T('nOrders')} (${rows.length})</h3><label style="min-width:240px">${T('teacher')}<select data-k="o_group" data-re>${opts(gopts, g)}</select></label></div><div class="scroll"><table><thead><tr><th>#</th><th>${T('registeredAt')}</th><th>${T('registeredBy')}</th><th>${T('orderPeriod')}</th><th class="num">${T('ordered')}</th><th>${T('status')}</th><th></th></tr></thead><tbody>
-      ${rows.map(o => `<tr><td><b>${esc(o.number)}</b></td><td>${fdt(o.created_at)}</td><td>${esc(o.registrant_name)}<div class="muted">${esc(o.registrant_contact)}</div></td><td>${esc(pname(D().per[o.period_id]))}</td><td class="num">${D().lines.filter(l => l.order_id === o.id).reduce((a, l) => a + l.qty, 0)}</td><td>${T(o.status === 'preorder' ? 'stPreorder' : o.status === 'active' ? 'stActive' : 'stCancelled')}${o.status === 'active' && sigs[sig(o)] > 1 ? `<div class="err">${T('dupFlag')}</div>` : ''}</td><td><button class="btn sec sm" data-act="openOrder" data-id="${o.id}">${T('detail')}</button></td></tr>`).join('')}</tbody></table></div></div>${orderDetail()}`;
+    return `<div class="card col"><div class="row between" style="align-items:flex-end"><h3>${T('tabOrders')} (${rows.length})</h3><label style="flex:0 1 260px;min-width:180px">${T('teacher')}<select data-k="o_group" data-re>${opts(gopts, g)}</select></label></div><div class="scroll"><table><thead><tr><th>#</th><th>${T('registeredAt')}</th><th>${T('registeredBy')}</th><th>${T('orderPeriod')}</th><th class="num">${T('ordered')}</th><th>${T('status')}</th><th></th></tr></thead><tbody>
+      ${rows.map(o => `<tr><td><b>${esc(o.number)}</b></td><td>${fdt(o.created_at)}</td><td>${esc(o.registrant_name)}<div class="muted">${esc(o.registrant_contact)}</div></td><td>${esc(pname(D().per[o.period_id]))}</td><td class="num">${D().lines.filter(l => l.order_id === o.id).reduce((a, l) => a + l.qty, 0)}</td><td>${T(o.status === 'preorder' ? 'stPreorder' : o.status === 'active' ? 'stActive' : 'stCancelled')}${o.status === 'active' && sigs[sig(o)] > 1 ? `<div class="err">${T('dupFlag')}</div>` : ''}</td><td><button class="btn sec" data-act="openOrder" data-id="${o.id}">${T('viewOrder')}</button></td></tr>`).join('')}</tbody></table></div></div>${orderDetail()}`;
+  }
+  function vPedidos() {
+    const status = A.f.o_status || 'all';
+    const filters = [['preorder', 'filterPreorder'], ['active', 'filterConfirmed'], ['delivered', 'filterDelivered'], ['all', 'filterAllOrders']].map(([v, k]) => `<button type="button" class="btn ${status === v ? '' : 'sec'}" data-act="setOrderFilter" data-v="${v}">${T(k)}</button>`).join('');
+    return summaryHead() + `<div class="row" id="order-filters">${filters}</div><div id="order-list">${status === 'delivered' ? vDeliveries() : vOrders()}</div>`;
   }
   function orderDetail() {
     const o = A.orderSel && D().ord[A.orderSel]; if (!o) return '';
@@ -212,10 +288,10 @@
         ${l.personalization ? `<label>${T('pers')}<input data-m="eq" data-k="${l.id}:t" value="${esc(ev(l, 't', l.personalization))}"/></label>` : ''}</div>
         <div class="row"><button class="btn sm" data-act="saveLine" data-id="${l.id}">${T('saveCorr')}</button></div></div>`; }).join('') +
       `<div class="row" style="align-items:flex-end"><label style="flex:1 1 260px">${T('cancelReason')}<input data-k="cancel" value="${esc(A.f.cancel)}"/></label><button class="btn sec" data-act="cancelOrder" data-id="${o.id}">${T('cancelOrder')}</button></div>` : '';
-    return `<div class="card col" style="border-color:var(--deep-blue)"><div class="row between"><div><div class="eyebrow">${T('detail')}</div><h2>${esc(o.number)}</h2></div><button class="lk" data-act="closeOrder">${T('close2')} ✕</button></div>
+    return `<div class="card col"><div class="row between"><div><div class="eyebrow">${T('detail')}</div><h2>${esc(o.number)}</h2></div><button class="lk" data-act="closeOrder">${T('close2')} ✕</button></div>
       <div class="grid"><div><div class="muted">${T('registeredBy')}</div><b>${esc(o.registrant_name)}</b> · ${T({ coord: 'roleCoord', teacher: 'roleTeacher', rep: 'roleRep' }[o.registrant_role])}<div class="muted">${esc(o.registrant_contact)}</div></div><div><div class="muted">${T('registeredAt')}</div><b>${fdt(o.created_at)}</b></div><div><div class="muted">${T('orderPeriod')}</div><b>${esc(pname(p))}</b></div><div><div class="muted">${T('status')}</div><b>${T(o.status === 'preorder' ? 'stPreorder' : o.status === 'active' ? 'stActive' : 'stCancelled')}</b>${editable ? '' : `<div class="err">${T('cancelledInfo')} ${esc(o.cancel_reason)}</div>`}</div></div>
       <div class="scroll"><table><thead><tr><th>${T('teacher')}</th><th>${T('product')}</th><th>${T('color')}</th><th>${T('size')}</th><th class="num">${T('qty')}</th><th class="num">${T('delivered2')}</th><th>${T('pers')}</th></tr></thead><tbody>
-      ${ls.map(l => `<tr><td>${esc(D().grp[l.group_id].teacher)}</td><td>${esc(dsc(l))}</td><td>${esc(loc(l.color_name))}</td><td>${esc(szl(l))}</td><td class="num">${l.qty}</td><td class="num">${delq(l.id)}</td><td><b>${l.personalization ? '“' + esc(l.personalization) + '”' : ''}</b></td></tr>`).join('')}</tbody></table></div>${corr}${o.status === 'preorder' ? `<button class="btn" data-act="confirmPreorder" data-id="${o.id}">${T('confirmPreorder')}</button>` : ''}
+      ${ls.map(l => `<tr><td>${esc(D().grp[l.group_id] ? D().grp[l.group_id].teacher : '')}</td><td>${esc(dsc(l))}</td><td>${esc(loc(l.color_name))}</td><td>${esc(szl(l))}</td><td class="num">${l.qty}</td><td class="num">${delq(l.id)}</td><td><b>${l.personalization ? '“' + esc(l.personalization) + '”' : ''}</b></td></tr>`).join('')}</tbody></table></div>${corr}${o.status === 'preorder' ? `<button class="btn" data-act="confirmPreorder" data-id="${o.id}">${T('confirmPreorder')}</button>` : ''}
       <h3>${T('history')}</h3><table><thead><tr><th>${T('registeredAt')}</th><th>${T('by')}</th><th>${T('action')}</th><th>${T('detail')}</th></tr></thead><tbody>${D().hist.filter(h => h.order_id === o.id).sort((a, b) => a.at.localeCompare(b.at)).map(h => `<tr><td>${fdt(h.at)}</td><td>${esc(h.by_email || '')}</td><td>${T('a_' + h.action)}</td><td>${esc(h.detail)}</td></tr>`).join('')}</tbody></table></div>`;
   }
   function vProduction() {
@@ -251,8 +327,8 @@
     const rowT = (l, extra = '') => `<tr>${extra}<td>${esc(dsc(l, rl))}<div>${esc(l.design || '')}</div></td><td>${esc(loc(l.color_name, rl))}</td><td>${esc(szl(l, rl))}</td>`;
     const rg = ps.length === 1 && D().groups.some(g => g.id === A.rGroup && g.period_id === ps[0].id) ? A.rGroup : 'all';
     ps.forEach(p => {
-      const s = D().sch[p.school_id], gsel = rg === 'all' ? null : D().grp[rg];
-      const head = (title, g) => `<div class="${A.rType === 'prodsum' ? 'sheet prodsum' : 'sheet'}"><div class="row between" style="align-items:flex-start;border-bottom:2px solid var(--deep-blue);padding-bottom:12px;margin-bottom:14px"><div><h1>${title}</h1><div style="font-size:15px;font-weight:700;margin-top:4px">${esc(s.name)} · ${rng(p, rl)}</div><div style="font-size:13px">${g ? esc(gl(g, rl)) : ''}</div></div><div class="row" style="gap:14px">${s.logo_path ? `<img src="${esc(s.logo_path)}" alt="" style="height:64px;width:auto"/>` : ''}<img src="assets/logo-color.svg" alt="" style="height:52px;width:auto"/></div></div>
+      const s = D().sch[p.school_id], gsel = rg === 'all' ? null : D().grp[rg], schoolLogo = logoSrc(s.logo_path);
+      const head = (title, g) => `<div class="${A.rType === 'prodsum' ? 'sheet prodsum' : 'sheet'}"><div class="row between" style="align-items:flex-start;border-bottom:2px solid var(--deep-blue);padding-bottom:12px;margin-bottom:14px"><div><h1>${title}</h1><div style="font-size:15px;font-weight:700;margin-top:4px">${esc(s.name)} · ${rng(p, rl)}</div><div style="font-size:13px">${g ? esc(gl(g, rl)) : ''}</div></div><div class="row" style="gap:14px">${schoolLogo ? `<img src="${esc(schoolLogo)}" alt="" style="height:64px;width:auto"/>` : ''}<img src="assets/logo-color.svg" alt="" style="height:52px;width:auto"/></div></div>
         <div style="font-size:12px;color:#555;margin-bottom:14px">${R('filters')}: ${R('school')}: ${esc(s.name)} · ${R('orderPeriod')}: ${rng(p, rl)} · ${R('teacher')}: ${gsel ? esc(gsel.teacher) : R('fAll')} · ${R('generated')}: ${now.toLocaleString(rl === 'es' ? 'es-US' : 'en-US')} · ID: <b>RPT-${code}-${p.id.slice(0, 4).toUpperCase()}${g ? '-' + g.id.slice(0, 4).toUpperCase() : ''}-${ymd}</b></div>`;
       const gs = D().groups.filter(g => g.period_id === p.id && (rg === 'all' || g.id === rg));
       if (A.rType === 'prodsum') { out.push(prodSummarySheet(p, s, rg, gsel, rl, R, head)); } else if (A.rType === 'preorders') { const ls = D().lines.filter(l => l.period_id === p.id && (rg === 'all' || l.group_id === rg) && D().ord[l.order_id].status !== 'cancelled'); out.push(head(R('r_preorders'), gsel) + `<table><thead><tr><th># / ${R('status')}</th><th>${R('registeredBy')}</th><th>${R('teacher')}</th><th>${R('product')}</th><th>${R('color')}</th><th>${R('size')}</th><th>${R('qty')}</th><th>${R('pers')}</th></tr></thead><tbody>${ls.map(l => { const o=D().ord[l.order_id]; return rowT(l, `<td>${esc(o.number)}<div>${R(o.status === 'preorder' ? 'stPreorder' : 'stActive')}</div></td><td>${esc(o.registrant_name)}</td><td>${esc(D().grp[l.group_id].teacher)}</td>`) + `<td>${l.qty}</td><td>${esc(l.personalization)}</td></tr>`; }).join('')}</tbody></table></div>`); } else if (A.rType === 'production') {
@@ -263,15 +339,55 @@
         gs.forEach(g => { const ls = act(p.id).filter(l => l.group_id === g.id); if (!ls.length) return;
           out.push(head(R('r_prep'), g) + `<table><thead><tr><th style="width:30px"></th><th>${R('product')}</th><th>${R('color')}</th><th>${R('size')}</th><th class="num">${R('qty')}</th><th>${R('pers')}</th></tr></thead><tbody>${ls.map(l => rowT(l, '<td><span class="box"></span></td>') + `<td class="num">${l.qty}</td><td>${l.personalization ? '“' + esc(l.personalization) + '”' : ''}</td></tr>`).join('')}</tbody></table><div style="font-weight:800;font-size:16px;margin-top:12px">${R('packTotal')}: ${ls.reduce((a, l) => a + l.qty, 0)}</div><div style="font-size:12px;color:#555;margin-top:10px">${R('paperNote')}</div></div>`); });
       } else if (A.rType === 'delivery') {
-        gs.forEach(g => { const ls = act(p.id).filter(l => l.group_id === g.id); if (!ls.length) return; const q = ls.reduce((a, l) => a + l.qty, 0), d = ls.reduce((a, l) => a + delq(l.id), 0);
-          out.push(head(R('r_delivery'), g) + `<table><thead><tr><th>${R('product')}</th><th>${R('color')}</th><th>${R('size')}</th><th class="num">${R('ordered2')}</th><th class="num">${R('delivered2')}</th><th class="num">${R('pendingShort')}</th></tr></thead><tbody>${ls.map(l => rowT(l) + `<td class="num">${l.qty}</td><td class="num">${delq(l.id)}</td><td class="num">${l.qty - delq(l.id)}</td></tr>`).join('')}<tr><td colspan="3"><b>${R('total')}</b></td><td class="num"><b>${q}</b></td><td class="num"><b>${d}</b></td><td class="num"><b>${q - d}</b></td></tr></tbody></table>
-            <div class="sigs"><div>${R('date')}:</div><div>${R('receivedBy')}:</div><div style="grid-column:1 / 3">${R('signature')}:</div></div><div style="font-size:12px;color:#555;margin-top:10px">${R('paperNote')}</div></div>`); });
+        out.push(...deliverySheets(p, s, rg, rl, R));
       } else {
         const rows = []; gs.forEach(g => act(p.id).filter(l => l.group_id === g.id && l.personalization).forEach(l => rows.push({ g, l })));
         out.push(head(R('r_individual'), gsel) + (rows.length ? `<table><thead><tr><th>${R('teacher')}</th><th>${R('product')}</th><th>${R('color')}</th><th>${R('size')}</th><th>${R('exactText')}</th></tr></thead><tbody>${rows.map(({ g, l }) => rowT(l, `<td>${esc(g.teacher)}</td>`) + `<td><b>“${esc(l.personalization)}”</b></td></tr>`).join('')}</tbody></table>` : `<div>${R('noInd')}</div>`) + '</div>');
       }
     });
     return out.join('') || `<div class="muted">${T('noItems')}</div>`;
+  }
+  function sizeRank(age, size) {
+    const order = ['YXS', 'YS', 'YM', 'YL', 'YXL', 'Y2XL', 'Y3XL', 'XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', '6XL'];
+    let token = String(size || '').trim().toUpperCase();
+    if (age === 'child' && token && token.charAt(0) !== 'Y') {
+      if (token === 'XS') token = 'YXS';
+      else if (token === 'S' || token === 'M' || token === 'L' || token === 'XL') token = 'Y' + token;
+      else if (/^\d+XL$/.test(token)) token = 'Y' + token;
+    }
+    const i = order.indexOf(token);
+    return i < 0 ? 80 : i;
+  }
+  function deliverySheets(p, s, rg, rl, R) {
+    const includePre = A.packPre !== false;
+    const groups = D().groups.filter(g => g.period_id === p.id && (rg === 'all' || g.id === rg)).slice()
+      .sort((a, b) => (a.teacher || '').localeCompare(b.teacher || '', rl === 'es' ? 'es' : 'en') || (a.grade || '').localeCompare(b.grade || '', rl === 'es' ? 'es' : 'en') || (a.room || '').localeCompare(b.room || ''));
+    const note = includePre ? R('packNoteIn') : R('packNoteOut');
+    const logo = logoSrc(s.logo_path);
+    const out = [];
+    groups.forEach(g => {
+      const raw = D().lines.filter(l => {
+        if (l.period_id !== p.id || l.group_id !== g.id) return false;
+        const o = D().ord[l.order_id];
+        if (!o || o.status === 'cancelled' || (o.status !== 'active' && o.status !== 'preorder')) return false;
+        return includePre || o.status === 'active';
+      });
+      if (!raw.length) return;
+      const map = new Map();
+      raw.forEach(l => {
+        const name = loc(l.product_name, rl) || '';
+        const pers = (l.personalization || '').trim();
+        const key = [name, l.code || '', l.color_id || '', l.age || '', l.size || '', pers].join('\u0001');
+        const row = map.get(key) || { name, code: l.code || '', color: loc(l.color_name, rl), age: l.age || '', size: l.size || '', pers, qty: 0 };
+        row.qty += Number(l.qty) || 0;
+        map.set(key, row);
+      });
+      const rows = Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name, rl === 'es' ? 'es' : 'en') || sizeRank(a.age, a.size) - sizeRank(b.age, b.size) || a.color.localeCompare(b.color, rl === 'es' ? 'es' : 'en') || a.pers.localeCompare(b.pers, rl === 'es' ? 'es' : 'en'));
+      const total = rows.reduce((n, r) => n + r.qty, 0);
+      const who = [g.teacher, g.grade, g.room ? R('room') + ' ' + g.room : ''].filter(Boolean).join(' · ');
+      out.push(`<div class="sheet pack" data-teacher="${esc(g.teacher)}"><div class="row between" style="align-items:flex-start;border-bottom:2px solid var(--deep-blue);padding-bottom:12px;margin-bottom:14px"><div><div class="eyebrow">${esc(s.name)}</div><h1>${R('r_delivery')}</h1><h2>${esc(who)}</h2><div style="font-size:14px">${rng(p, rl)}</div></div><div class="row" style="gap:14px">${logo ? `<img src="${esc(logo)}" alt="" style="height:64px;width:auto"/>` : ''}<img src="assets/logo-color.svg" alt="" style="height:52px;width:auto"/></div></div><p style="font-size:13px;margin:0 0 12px">${esc(note)}</p><table><thead><tr><th>${R('product')}</th><th>${R('color')}</th><th>${R('size')}</th><th class="num">${R('qty')}</th><th>${R('pers')}</th></tr></thead><tbody>${rows.map(r => `<tr><td><b>${esc(r.name)}</b>${r.code ? `<div>${esc(r.code)}</div>` : ''}</td><td>${esc(r.color)}</td><td>${esc(szl(r, rl))}</td><td class="num">${r.qty}</td><td>${r.pers ? '“' + esc(r.pers) + '”' : ''}</td></tr>`).join('')}</tbody></table><div style="font-weight:800;font-size:16px;margin-top:12px">${R('packTotal')}: ${total}</div></div>`);
+    });
+    return out;
   }
   function reportGroupId() {
     const ps = fPeriods();
@@ -359,17 +475,22 @@
   }
   function vReports() {
     const ps = fPeriods(), gopts = [{ v: 'all', l: T('fAll') }, ...(ps.length === 1 ? D().groups.filter(g => g.period_id === ps[0].id).map(g => ({ v: g.id, l: gl(g) })) : [])];
-    const extra = A.rType === 'prodsum' ? `<label>${T('prodStatus')}<select data-s="rStatus" data-re>${opts([{ v: 'all', l: T('sumAll') }, { v: 'preorder', l: T('sumPreorder') }, { v: 'active', l: T('sumActive') }], A.rStatus || 'all')}</select></label>
-      <label style="flex-direction:row;align-items:center;gap:10px;min-height:44px;grid-column:1 / -1"><input type="checkbox" data-s="rByGroup" data-re ${A.rByGroup ? 'checked' : ''}/> <span>${T('byGroup')}</span></label>` : '';
-    return `<div class="no-print card col"><div class="grid"><label>${T('reportType')}<select data-s="rType" data-re>${opts(['prodsum', 'preorders', 'prep', 'individual', 'delivery', 'production'].map(k => ({ v: k, l: T('r_' + k) })), A.rType)}</select></label>
-      <label>${T('teacher')}<select data-s="rGroup" data-re>${opts(gopts, A.rGroup)}</select></label><label>${T('reportLang')}<select data-s="rLang" data-re>${opts([{ v: 'es', l: 'Español' }, { v: 'en', l: 'English' }], A.rLang)}</select></label>
-      <label>${T('paper')}<select data-s="rPaper" data-re>${opts([{ v: 'letter', l: T('letterOpt') }, { v: 'a4', l: 'A4' }], A.rPaper)}</select></label>${extra}</div>
+    const preparing = A.rType === 'prepare';
+    const extra = A.more.report ? `<div class="grid"><label>${T('reportLang')}<select data-s="rLang" data-re>${opts([{ v: 'es', l: 'Español' }, { v: 'en', l: 'English' }], A.rLang)}</select></label>
+      <label>${T('paper')}<select data-s="rPaper" data-re>${opts([{ v: 'letter', l: T('letterOpt') }, { v: 'a4', l: 'A4' }], A.rPaper)}</select></label>
+      ${A.rType === 'prodsum' ? `<label>${T('prodStatus')}<select data-s="rStatus" data-re>${opts([{ v: 'all', l: T('sumAll') }, { v: 'preorder', l: T('sumPreorder') }, { v: 'active', l: T('sumActive') }], A.rStatus || 'all')}</select></label>
+      <label style="flex-direction:row;align-items:center;gap:10px;min-height:44px"><input type="checkbox" data-s="rByGroup" data-re ${A.rByGroup ? 'checked' : ''}/> <span>${T('byGroup')}</span></label>` : ''}</div>` : '';
+    const packBar = `<div class="row" id="pack-bar"><button type="button" class="btn ${A.packPre === false ? 'sec' : ''}" data-act="setPack" data-v="pre">${T('packInclude')}</button><button type="button" class="btn ${A.packPre === false ? '' : 'sec'}" data-act="setPack" data-v="confirmed">${T('packOnly')}</button><button class="btn" data-act="print" id="pack-print">${T('printPdf')}</button></div>`;
+    const tools = A.rType === 'delivery' ? packBar : preparing ? `<p class="muted" style="margin:0">${T('prepareHint')}</p>` : `<div class="row"><button class="btn" data-act="print">${T('print')}</button>${A.rType === 'prodsum' ? `<button type="button" class="lk" data-act="csvProd">${T('downloadCsv')}</button>` : ''}<span class="muted">${A.rType === 'prodsum' ? T('prodSumPrint') : T('printNote')}</span></div>`;
+    return `<div class="no-print card col"><div class="row"><button class="btn" data-act="openPack">${T('r_delivery')}</button></div><div class="grid"><label>${T('reportType')}<select data-s="rType" data-re>${opts(['prodsum', 'delivery', 'prepare', 'preorders', 'prep', 'individual', 'production'].map(k => ({ v: k, l: T('r_' + k) })), A.rType)}</select></label>
+      <label>${T('teacher')}<select data-s="rGroup" data-re>${opts(gopts, A.rGroup)}</select></label></div>
+      <button type="button" class="lk" data-act="toggleMore" data-more="report">${A.more.report ? T('lessOpts') : T('moreOpts')}</button>${extra}
       ${A.rType === 'prodsum' ? `<p class="muted" style="margin:0">${T('reportLand')}</p>` : ''}${A.rType === 'production' ? `<p class="warn" style="margin:0">${T('prepOnly')}</p>` : ''}
-      <div class="row"><button class="btn" data-act="print">${T('print')}</button>${A.rType === 'prodsum' ? `<button class="btn sec" data-act="csvProd">${T('downloadCsv')}</button>` : ''}<span class="muted">${A.rType === 'prodsum' ? T('prodSumPrint') : T('printNote')}</span></div></div>${sheets()}`;
+      ${tools}</div>${preparing ? vProduction() : sheets()}<div class="no-print">${checksBlock()}</div>`;
   }
 
   // ---- armado ----
-  const VIEWS = [['reports', 'nReports', vReports], ['summary', 'nSummary', vSummary], ['schools', 'nSchools', vSchools], ['orders', 'nOrders', vOrders], ['production', 'nProduction', vProduction], ['deliveries', 'nDeliveries', vDeliveries]];
+  const VIEWS = [['schools', 'tabSchools', vSchools], ['orders', 'tabOrders', vPedidos], ['reports', 'tabReports', vReports]];
   const langBtns = () => ['es', 'en'].map(l => `<button class="lang ${JK.lang === l ? 'on' : ''}" data-act="lang" data-v="${l}">${l.toUpperCase()}</button>`).join('');
   function render() {
     document.documentElement.lang = JK.lang;
@@ -412,7 +533,7 @@
     if (!A.ok) { root.innerHTML = `<div class="card col" style="max-width:520px;margin:40px auto"><b class="err">${T('noAccess')}</b><div class="muted">${esc(A.user.email)}</div><button class="btn sec" data-act="logout">${T('logout')}</button></div>`; return; }
     if (!A.D) { root.innerHTML = `<div style="padding:40px;text-align:center" class="muted">${A.toast ? esc(A.toast) : '…'}</div>`; return; }
     const cur = VIEWS.find(v => v[0] === A.view);
-    root.innerHTML = `<div class="shell"><aside class="side no-print"><img src="assets/logo-white.svg" alt="JKINnovations" style="height:56px;width:auto;align-self:flex-start"/><nav>${VIEWS.map(v => `<button class="${A.view === v[0] ? 'on' : ''}" data-act="nav" data-v="${v[0]}">${T(v[1])}</button>`).join('')}</nav><button data-act="logout" style="margin-top:auto;border:1px solid #8aa0b6">${T('logout')}</button></aside>
+    root.innerHTML = `<div class="shell"><aside class="side no-print"><img src="assets/logo-white.svg" alt="JKINnovations" style="height:48px;width:auto;align-self:flex-start"/><nav>${VIEWS.map(v => `<button class="${A.view === v[0] ? 'on' : ''}" data-act="nav" data-v="${v[0]}">${T(v[1])}</button>`).join('')}</nav><button data-act="logout">${T('logout')}</button></aside>
       <main class="main"><div class="no-print row between" style="align-items:flex-end"><div><div class="eyebrow">${T('app')}</div><h1>${T(cur[1])}</h1></div><div class="row" style="gap:6px">${langBtns()}<button class="btn sec sm" data-act="reload">${A.loading ? '…' : T('refresh')}</button></div></div>
       ${filters()}${A.toast ? `<div class="no-print toast">${esc(A.toast)}</div>` : ''}${cur[2]()}</main></div>`;
   }
@@ -423,6 +544,11 @@
     lang: el => { JK.setLang(el.dataset.v); A.rLang = el.dataset.v; render(); },
     nav: el => { A.view = el.dataset.v; render(); },
     openProdSum: () => { A.view = 'reports'; A.rType = 'prodsum'; A.rStatus = A.rStatus || 'all'; render(); },
+    openPack: () => { A.view = 'reports'; A.rType = 'delivery'; A.rPaper = A.rPaper || 'letter'; render(); const bar = document.getElementById('pack-print'); if (bar) bar.scrollIntoView({ block: 'center' }); },
+    setPack: el => { A.packPre = el.dataset.v !== 'confirmed'; render(); },
+    openPending: () => { A.view = 'orders'; A.f.o_status = 'preorder'; A.orderSel = null; render(); const el = document.getElementById('order-list'); if (el) el.scrollIntoView({ block: 'start' }); },
+    toggleMore: el => { A.more[el.dataset.more] = !A.more[el.dataset.more]; render(); },
+    setOrderFilter: el => { A.f.o_status = el.dataset.v; A.orderSel = null; render(); const box = document.getElementById('order-list'); if (box) box.scrollIntoView({ block: 'start' }); },
     reload: () => loadAll(), print: () => window.print(),
     csvProd: () => {
       const blob = new Blob(['\uFEFF' + prodCsv()], { type: 'text/csv;charset=utf-8' });
@@ -476,23 +602,38 @@
       render();
     },
     logout: async () => { clearRecovery(); A.gate = ''; await sb().auth.signOut(); A.user = null; A.ok = false; A.D = null; render(); },
-    newSchool: () => { A.schoolForm = 'new'; A.editProd = null; Object.assign(A.f, { sc_name: '', sc_collector: '', sc_contact: '', sc_logo: '', sc_open: todayLA(), sc_close: '', sc_mode: 'mixed', sc_groups_text: '' }); render(); },
-    editSchool: el => { const s = D().sch[el.dataset.id]; A.schoolForm = s.id; Object.assign(A.f, { sc_name: s.name, sc_collector: s.collector, sc_contact: s.contact, sc_logo: s.logo_path || '' }); render(); },
-    cancelSchool: () => { A.schoolForm = null; render(); },
+    newSchool: () => { A.schoolForm = 'new'; A.editProd = null; resetLogoPick(); Object.assign(A.f, { sc_name: '', sc_collector: '', sc_contact: '', sc_logo: '', sc_open: todayLA(), sc_close: '', sc_mode: 'mixed', sc_groups_text: '' }); render(); },
+    editSchool: el => { const s = D().sch[el.dataset.id]; A.schoolForm = s.id; resetLogoPick(); Object.assign(A.f, { sc_name: s.name, sc_collector: s.collector, sc_contact: s.contact, sc_logo: s.logo_path || '' }); render(); },
+    cancelSchool: () => { A.schoolForm = null; resetLogoPick(); render(); },
+    toggleLogo: () => { if (A.logoBusy) return; A.logoOpen = true; render(); const box = document.getElementById('logo-editor'); if (box) box.scrollIntoView({ block: 'nearest' }); },
+    clearLogo: () => { if (A.logoBusy) return; revokeLogoPreview(); A.logoFile = null; A.f.sc_logo = ''; A.logoErr = ''; A.logoOpen = true; render(); },
     saveSchool: async () => {
+      if (A.logoBusy) return;
       const f = A.f; if (!(f.sc_name || '').trim()) return toast(T('msgSchoolInvalid'));
       if (A.schoolForm === 'new') {
         if (!f.sc_open || !f.sc_close || f.sc_close < f.sc_open) return toast(T('msgPeriodInvalid'));
+        if (!parseGroupLines(f.sc_groups_text).length) return toast(T('vGroups'));
+      }
+      const previous = (f.sc_logo || '').trim();
+      let logo = previous;
+      if (A.logoFile) {
+        A.logoBusy = true; render();
+        logo = await uploadSchoolLogo(A.logoFile);
+        A.logoBusy = false;
+        if (!logo) return render();
+      }
+      if (A.schoolForm === 'new') {
         const groups = parseGroupLines(f.sc_groups_text);
-        if (!groups.length) return toast(T('vGroups'));
-        const r = await rpc('admin_create_school', { p_name: f.sc_name.trim(), p_collector: f.sc_collector || '', p_contact: f.sc_contact || '', p_logo: (f.sc_logo || '').trim(), p_open: f.sc_open, p_close: f.sc_close, p_mode: f.sc_mode || 'mixed', p_groups: groups });
-        if (r.error) return;
-        A.schoolForm = null; await loadAll();
+        const r = await rpc('admin_create_school', { p_name: f.sc_name.trim(), p_collector: f.sc_collector || '', p_contact: f.sc_contact || '', p_logo: logo, p_open: f.sc_open, p_close: f.sc_close, p_mode: f.sc_mode || 'mixed', p_groups: groups });
+        if (r.error) { if (logo !== previous) await removeStoredLogo(logo); return; }
+        resetLogoPick(); A.schoolForm = null; await loadAll();
         if (r.data && r.data.period_id) { A.fSchool = r.data.school_id; acts.cfg({ dataset: { id: r.data.period_id } }); }
         return toast(T('schoolReady'));
       }
-      const r = await rpc('admin_update_school', { p_school: A.schoolForm, p_name: f.sc_name.trim(), p_collector: f.sc_collector || '', p_contact: f.sc_contact || '', p_logo: (f.sc_logo || '').trim() });
-      if (r.error) return; A.schoolForm = null; await loadAll(); toast(T('msgSaved'));
+      const r = await rpc('admin_update_school', { p_school: A.schoolForm, p_name: f.sc_name.trim(), p_collector: f.sc_collector || '', p_contact: f.sc_contact || '', p_logo: logo });
+      if (r.error) { if (logo !== previous) await removeStoredLogo(logo); return; }
+      if (previous !== logo) await removeStoredLogo(previous);
+      resetLogoPick(); A.schoolForm = null; await loadAll(); toast(T('msgSaved'));
     },
     newPeriod: el => { A.newFor = el.dataset.id; Object.assign(A.f, { np_open: todayLA(), np_close: '', np_mode: 'mixed' }); render(); }, cancelNew: () => { A.newFor = null; render(); },
     createPeriod: async el => { const f = A.f; if (!f.np_open || !f.np_close || f.np_close < f.np_open) return toast(T('msgPeriodInvalid'));
@@ -561,6 +702,15 @@
     if (btn && acts[btn.dataset.act]) { e.preventDefault(); acts[btn.dataset.act](btn); }
   });
   root.addEventListener('change', e => { const t = e.target;
+    if (t.dataset.logo !== undefined) {
+      const file = t.files && t.files[0];
+      if (!file || A.logoBusy) return;
+      const kind = logoKind(file);
+      revokeLogoPreview(); A.logoFile = null;
+      if (!kind || !file.size) { A.logoErr = T('logoType'); toast(A.logoErr); render(); return; }
+      if (file.size > LOGO_MAX) { A.logoErr = T('logoSize'); toast(A.logoErr); render(); return; }
+      A.logoErr = ''; A.logoFile = file; A.logoPreview = URL.createObjectURL(file); render(); return;
+    }
     if (t.dataset.act && (t.tagName === 'SELECT' || t.type === 'checkbox')) { acts[t.dataset.act](t); return; }
     set(t, true); });
   root.addEventListener('input', e => { if (e.target.tagName !== 'SELECT' && e.target.type !== 'checkbox') set(e.target, false); });

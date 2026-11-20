@@ -47,5 +47,20 @@ window.JK = (function () {
     auth: { storage: store, lock: authLock, persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
   }));
   const img = p => p ? esc(p) : '';
-  return { get lang() { return lang; }, setLang(l) { lang = l; try { store.setItem('jk_lang', l); } catch (e) {} document.documentElement.lang = l; }, T, esc, money, loc, fd, fdt, szl, dsc, price, uuid, configured, sb, img };
+  // Logo de una escuela: ruta del sitio (assets/img/school-harder.png) o URL
+  // pública de Storage. Las rutas relativas se dejan igual para que Harder no cambie.
+  const logoSrc = p => {
+    const s = String(p == null ? '' : p).trim();
+    if (!s || /[\u0000-\u001f]/.test(s)) return '';
+    if (/^https?:\/\//i.test(s)) return s;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(s)) return '';
+    if (s.indexOf('..') !== -1) return '';
+    if (s.charAt(0) === '/' || s.indexOf('assets/') === 0 || s.indexOf('./') === 0) return s.replace(/^\.\//, '');
+    const base = String((window.APP_CONFIG && window.APP_CONFIG.SUPABASE_URL) || '').replace(/\/$/, '');
+    if (!/^https?:\/\//i.test(base)) return '';
+    const key = s.replace(/^\/+/, '').replace(/^school-logos\//, '');
+    if (!key) return '';
+    return base + '/storage/v1/object/public/school-logos/' + key.split('/').map(part => encodeURIComponent(part)).join('/');
+  };
+  return { get lang() { return lang; }, setLang(l) { lang = l; try { store.setItem('jk_lang', l); } catch (e) {} document.documentElement.lang = l; }, T, esc, money, loc, fd, fdt, szl, dsc, price, uuid, configured, sb, img, logoSrc };
 })();
