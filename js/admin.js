@@ -339,15 +339,55 @@
         gs.forEach(g => { const ls = act(p.id).filter(l => l.group_id === g.id); if (!ls.length) return;
           out.push(head(R('r_prep'), g) + `<table><thead><tr><th style="width:30px"></th><th>${R('product')}</th><th>${R('color')}</th><th>${R('size')}</th><th class="num">${R('qty')}</th><th>${R('pers')}</th></tr></thead><tbody>${ls.map(l => rowT(l, '<td><span class="box"></span></td>') + `<td class="num">${l.qty}</td><td>${l.personalization ? '“' + esc(l.personalization) + '”' : ''}</td></tr>`).join('')}</tbody></table><div style="font-weight:800;font-size:16px;margin-top:12px">${R('packTotal')}: ${ls.reduce((a, l) => a + l.qty, 0)}</div><div style="font-size:12px;color:#555;margin-top:10px">${R('paperNote')}</div></div>`); });
       } else if (A.rType === 'delivery') {
-        gs.forEach(g => { const ls = act(p.id).filter(l => l.group_id === g.id); if (!ls.length) return; const q = ls.reduce((a, l) => a + l.qty, 0), d = ls.reduce((a, l) => a + delq(l.id), 0);
-          out.push(head(R('r_delivery'), g) + `<table><thead><tr><th>${R('product')}</th><th>${R('color')}</th><th>${R('size')}</th><th class="num">${R('ordered2')}</th><th class="num">${R('delivered2')}</th><th class="num">${R('pendingShort')}</th></tr></thead><tbody>${ls.map(l => rowT(l) + `<td class="num">${l.qty}</td><td class="num">${delq(l.id)}</td><td class="num">${l.qty - delq(l.id)}</td></tr>`).join('')}<tr><td colspan="3"><b>${R('total')}</b></td><td class="num"><b>${q}</b></td><td class="num"><b>${d}</b></td><td class="num"><b>${q - d}</b></td></tr></tbody></table>
-            <div class="sigs"><div>${R('date')}:</div><div>${R('receivedBy')}:</div><div style="grid-column:1 / 3">${R('signature')}:</div></div><div style="font-size:12px;color:#555;margin-top:10px">${R('paperNote')}</div></div>`); });
+        out.push(...deliverySheets(p, s, rg, rl, R));
       } else {
         const rows = []; gs.forEach(g => act(p.id).filter(l => l.group_id === g.id && l.personalization).forEach(l => rows.push({ g, l })));
         out.push(head(R('r_individual'), gsel) + (rows.length ? `<table><thead><tr><th>${R('teacher')}</th><th>${R('product')}</th><th>${R('color')}</th><th>${R('size')}</th><th>${R('exactText')}</th></tr></thead><tbody>${rows.map(({ g, l }) => rowT(l, `<td>${esc(g.teacher)}</td>`) + `<td><b>“${esc(l.personalization)}”</b></td></tr>`).join('')}</tbody></table>` : `<div>${R('noInd')}</div>`) + '</div>');
       }
     });
     return out.join('') || `<div class="muted">${T('noItems')}</div>`;
+  }
+  function sizeRank(age, size) {
+    const order = ['YXS', 'YS', 'YM', 'YL', 'YXL', 'Y2XL', 'Y3XL', 'XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', '6XL'];
+    let token = String(size || '').trim().toUpperCase();
+    if (age === 'child' && token && token.charAt(0) !== 'Y') {
+      if (token === 'XS') token = 'YXS';
+      else if (token === 'S' || token === 'M' || token === 'L' || token === 'XL') token = 'Y' + token;
+      else if (/^\d+XL$/.test(token)) token = 'Y' + token;
+    }
+    const i = order.indexOf(token);
+    return i < 0 ? 80 : i;
+  }
+  function deliverySheets(p, s, rg, rl, R) {
+    const includePre = A.packPre !== false;
+    const groups = D().groups.filter(g => g.period_id === p.id && (rg === 'all' || g.id === rg)).slice()
+      .sort((a, b) => (a.teacher || '').localeCompare(b.teacher || '', rl === 'es' ? 'es' : 'en') || (a.grade || '').localeCompare(b.grade || '', rl === 'es' ? 'es' : 'en') || (a.room || '').localeCompare(b.room || ''));
+    const note = includePre ? R('packNoteIn') : R('packNoteOut');
+    const logo = logoSrc(s.logo_path);
+    const out = [];
+    groups.forEach(g => {
+      const raw = D().lines.filter(l => {
+        if (l.period_id !== p.id || l.group_id !== g.id) return false;
+        const o = D().ord[l.order_id];
+        if (!o || o.status === 'cancelled' || (o.status !== 'active' && o.status !== 'preorder')) return false;
+        return includePre || o.status === 'active';
+      });
+      if (!raw.length) return;
+      const map = new Map();
+      raw.forEach(l => {
+        const name = loc(l.product_name, rl) || '';
+        const pers = (l.personalization || '').trim();
+        const key = [name, l.code || '', l.color_id || '', l.age || '', l.size || '', pers].join('\u0001');
+        const row = map.get(key) || { name, code: l.code || '', color: loc(l.color_name, rl), age: l.age || '', size: l.size || '', pers, qty: 0 };
+        row.qty += Number(l.qty) || 0;
+        map.set(key, row);
+      });
+      const rows = Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name, rl === 'es' ? 'es' : 'en') || sizeRank(a.age, a.size) - sizeRank(b.age, b.size) || a.color.localeCompare(b.color, rl === 'es' ? 'es' : 'en') || a.pers.localeCompare(b.pers, rl === 'es' ? 'es' : 'en'));
+      const total = rows.reduce((n, r) => n + r.qty, 0);
+      const who = [g.teacher, g.grade, g.room ? R('room') + ' ' + g.room : ''].filter(Boolean).join(' · ');
+      out.push(`<div class="sheet pack" data-teacher="${esc(g.teacher)}"><div class="row between" style="align-items:flex-start;border-bottom:2px solid var(--deep-blue);padding-bottom:12px;margin-bottom:14px"><div><div class="eyebrow">${esc(s.name)}</div><h1>${R('r_delivery')}</h1><h2>${esc(who)}</h2><div style="font-size:14px">${rng(p, rl)}</div></div><div class="row" style="gap:14px">${logo ? `<img src="${esc(logo)}" alt="" style="height:64px;width:auto"/>` : ''}<img src="assets/logo-color.svg" alt="" style="height:52px;width:auto"/></div></div><p style="font-size:13px;margin:0 0 12px">${esc(note)}</p><table><thead><tr><th>${R('product')}</th><th>${R('color')}</th><th>${R('size')}</th><th class="num">${R('qty')}</th><th>${R('pers')}</th></tr></thead><tbody>${rows.map(r => `<tr><td><b>${esc(r.name)}</b>${r.code ? `<div>${esc(r.code)}</div>` : ''}</td><td>${esc(r.color)}</td><td>${esc(szl(r, rl))}</td><td class="num">${r.qty}</td><td>${r.pers ? '“' + esc(r.pers) + '”' : ''}</td></tr>`).join('')}</tbody></table><div style="font-weight:800;font-size:16px;margin-top:12px">${R('packTotal')}: ${total}</div></div>`);
+    });
+    return out;
   }
   function reportGroupId() {
     const ps = fPeriods();
@@ -440,8 +480,9 @@
       <label>${T('paper')}<select data-s="rPaper" data-re>${opts([{ v: 'letter', l: T('letterOpt') }, { v: 'a4', l: 'A4' }], A.rPaper)}</select></label>
       ${A.rType === 'prodsum' ? `<label>${T('prodStatus')}<select data-s="rStatus" data-re>${opts([{ v: 'all', l: T('sumAll') }, { v: 'preorder', l: T('sumPreorder') }, { v: 'active', l: T('sumActive') }], A.rStatus || 'all')}</select></label>
       <label style="flex-direction:row;align-items:center;gap:10px;min-height:44px"><input type="checkbox" data-s="rByGroup" data-re ${A.rByGroup ? 'checked' : ''}/> <span>${T('byGroup')}</span></label>` : ''}</div>` : '';
-    const tools = preparing ? `<p class="muted" style="margin:0">${T('prepareHint')}</p>` : `<div class="row"><button class="btn" data-act="print">${T('print')}</button>${A.rType === 'prodsum' ? `<button type="button" class="lk" data-act="csvProd">${T('downloadCsv')}</button>` : ''}<span class="muted">${A.rType === 'prodsum' ? T('prodSumPrint') : T('printNote')}</span></div>`;
-    return `<div class="no-print card col"><div class="grid"><label>${T('reportType')}<select data-s="rType" data-re>${opts(['prodsum', 'prepare', 'preorders', 'prep', 'individual', 'delivery', 'production'].map(k => ({ v: k, l: T('r_' + k) })), A.rType)}</select></label>
+    const packBar = `<div class="row" id="pack-bar"><button type="button" class="btn ${A.packPre === false ? 'sec' : ''}" data-act="setPack" data-v="pre">${T('packInclude')}</button><button type="button" class="btn ${A.packPre === false ? '' : 'sec'}" data-act="setPack" data-v="confirmed">${T('packOnly')}</button><button class="btn" data-act="print" id="pack-print">${T('printPdf')}</button></div>`;
+    const tools = A.rType === 'delivery' ? packBar : preparing ? `<p class="muted" style="margin:0">${T('prepareHint')}</p>` : `<div class="row"><button class="btn" data-act="print">${T('print')}</button>${A.rType === 'prodsum' ? `<button type="button" class="lk" data-act="csvProd">${T('downloadCsv')}</button>` : ''}<span class="muted">${A.rType === 'prodsum' ? T('prodSumPrint') : T('printNote')}</span></div>`;
+    return `<div class="no-print card col"><div class="row"><button class="btn" data-act="openPack">${T('r_delivery')}</button></div><div class="grid"><label>${T('reportType')}<select data-s="rType" data-re>${opts(['prodsum', 'delivery', 'prepare', 'preorders', 'prep', 'individual', 'production'].map(k => ({ v: k, l: T('r_' + k) })), A.rType)}</select></label>
       <label>${T('teacher')}<select data-s="rGroup" data-re>${opts(gopts, A.rGroup)}</select></label></div>
       <button type="button" class="lk" data-act="toggleMore" data-more="report">${A.more.report ? T('lessOpts') : T('moreOpts')}</button>${extra}
       ${A.rType === 'prodsum' ? `<p class="muted" style="margin:0">${T('reportLand')}</p>` : ''}${A.rType === 'production' ? `<p class="warn" style="margin:0">${T('prepOnly')}</p>` : ''}
@@ -503,6 +544,8 @@
     lang: el => { JK.setLang(el.dataset.v); A.rLang = el.dataset.v; render(); },
     nav: el => { A.view = el.dataset.v; render(); },
     openProdSum: () => { A.view = 'reports'; A.rType = 'prodsum'; A.rStatus = A.rStatus || 'all'; render(); },
+    openPack: () => { A.view = 'reports'; A.rType = 'delivery'; A.rPaper = A.rPaper || 'letter'; render(); const bar = document.getElementById('pack-print'); if (bar) bar.scrollIntoView({ block: 'center' }); },
+    setPack: el => { A.packPre = el.dataset.v !== 'confirmed'; render(); },
     openPending: () => { A.view = 'orders'; A.f.o_status = 'preorder'; A.orderSel = null; render(); const el = document.getElementById('order-list'); if (el) el.scrollIntoView({ block: 'start' }); },
     toggleMore: el => { A.more[el.dataset.more] = !A.more[el.dataset.more]; render(); },
     setOrderFilter: el => { A.f.o_status = el.dataset.v; A.orderSel = null; render(); const box = document.getElementById('order-list'); if (box) box.scrollIntoView({ block: 'start' }); },
