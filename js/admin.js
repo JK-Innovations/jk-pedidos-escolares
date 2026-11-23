@@ -3,7 +3,7 @@
   const { T, esc, money, loc, fd, fdt, szl, dsc, logoSrc } = JK;
   const root = document.getElementById('app');
   const A = { user: null, ok: false, msg: '', D: null, loading: false, view: 'schools', fSchool: 'all', fPeriod: 'all', orderSel: null, delSel: null, cfg: null, newFor: null, schoolForm: null, editProd: null,
-    toast: '', rType: 'prodsum', rGroup: 'all', rLang: JK.lang, rPaper: 'letter', rStatus: 'all', rByGroup: false, gate: '', recovery: false, showPass: false, sending: false, authReady: false, f: {}, pq: {}, eq: {}, dq: {}, pf: {}, zoom: '', more: {} };
+    toast: '', rType: 'prodsum', rGroup: 'all', rLang: JK.lang, rPaper: 'letter', rStatus: 'all', rByGroup: false, gate: '', recovery: false, showPass: false, sending: false, authReady: false, f: {}, pq: {}, eq: {}, dq: {}, pf: {}, zoom: '', more: {}, g: null };
   const sb = () => JK.sb();
   const recoveryFromHash = () => { const raw = (location.hash || '').replace(/^#/, ''); return !!raw && new URLSearchParams(raw).get('type') === 'recovery'; };
   const markRecovery = () => { A.recovery = true; try { sessionStorage.setItem('jk_pw_recovery', '1'); } catch (e) {} };
@@ -105,9 +105,6 @@
     (f.pr_more || '').split('\n').forEach(line => { const p = line.split('|').map(s => s.trim()); if (p[0]) push(p[0], p[1], p[2]); });
     return out;
   }
-  function blankGarment() {
-    Object.assign(A.f, { pr_es: '', pr_en: '', pr_cat: 'school', pr_colors: '', pr_child: '', pr_adult: '', pr_price: '', pr_design: '', pr_pers: 'none', pr_photo: '', pr_code: '', pr_mes: '', pr_men: '', pr_more: '', pr_map: '' });
-  }
   const publicUrl = p => new URL('index.html', location.href).href + '?p=' + p.slug;
   const LOGO_BUCKET = 'school-logos';
   const LOGO_MAX = 2 * 1024 * 1024;
@@ -156,7 +153,92 @@
       A.logoErr = T('logoUpload'); toast(A.logoErr); return '';
     }
     return url;
+  }  // ---- prendas: fotos, colores y tallas ----
+  const PHOTO_BUCKET = 'product-photos';
+  const PHOTO_MAX = 3 * 1024 * 1024;
+  const PHOTO_TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/webp': 'webp' };
+  const KID_SIZES = ['XS', 'S', 'M', 'L', 'XL'];
+  const ADULT_SIZES = ['S', 'M', 'L', 'XL', '2XL', '3XL', '4XL'];
+  const BIG_SIZES = ['2XL', '3XL', '4XL', '5XL'];
+  const photoKind = file => {
+    const t = (file && file.type || '').toLowerCase();
+    if (PHOTO_TYPES[t]) return { mime: t === 'image/jpg' ? 'image/jpeg' : t, ext: PHOTO_TYPES[t] };
+    const m = !t && String(file && file.name || '').toLowerCase().match(/\.(png|jpe?g|webp)$/);
+    const ext = m && (m[1] === 'jpeg' ? 'jpg' : m[1]);
+    const mime = { png: 'image/png', jpg: 'image/jpeg', webp: 'image/webp' }[ext];
+    return mime ? { mime, ext } : null;
+  };
+  const checkPhoto = file => { const k = photoKind(file); if (!k || !file.size) return T('photoType'); if (file.size > PHOTO_MAX) return T('photoSize'); return ''; };
+  async function uploadGarmentPhoto(file) {
+    const kind = photoKind(file);
+    if (!kind) { A.g.err = T('photoType'); return ''; }
+    const path = JK.uuid() + '.' + kind.ext;
+    const body = (file.type || '').toLowerCase() === kind.mime ? file : new Blob([await file.arrayBuffer()], { type: kind.mime });
+    const { data, error } = await sb().storage.from(PHOTO_BUCKET).upload(path, body, { contentType: kind.mime, cacheControl: '3600', upsert: false });
+    if (error) { A.g.err = /bucket|not found|row-level|policy|violates|42501|\b403\b/i.test(storageErrText(error)) ? T('photoNeedSql') : T('photoUpload'); return ''; }
+    const pub = sb().storage.from(PHOTO_BUCKET).getPublicUrl((data && data.path) || path);
+    const url = pub && pub.data && pub.data.publicUrl;
+    if (!url || url.length > 300) { try { await sb().storage.from(PHOTO_BUCKET).remove([path]); } catch (e) {} A.g.err = T('photoUpload'); return ''; }
+    return url;
   }
+  const colorLabel = c => c.es && c.en && c.es !== c.en ? c.es + ' / ' + c.en : (c.es || c.en || '');
+  const newColor = (i, c) => ({ uid: JK.uuid(), id: (c && c.id) || '', name: c ? colorLabel(c) : '', sw: (c && c.sw) || SWATCH[i % SWATCH.length], photo: (c && c.photo) || '', flag: !!(c && c.flag), file: null, preview: '' });
+  const revokeGarmentPreviews = () => { const G = A.g; if (!G) return; [G.photoPreview, ...G.colors.map(c => c.preview)].forEach(u => { if (u) { try { URL.revokeObjectURL(u); } catch (e) {} } }); };
+  function blankGarment() {
+    revokeGarmentPreviews();
+    Object.assign(A.f, { pr_es: '', pr_en: '', pr_cat: 'school', pr_price: '', pr_extra: '', pr_design: '', pr_pers: 'none', pr_photo: '', pr_code: '', pr_mes: '', pr_men: '', pr_more: '', pr_map: '', pr_child_other: '', pr_adult_other: '' });
+    A.g = { colors: [newColor(0)], child: [], adult: [], photoFile: null, photoPreview: '', busy: false, err: '' };
+  }
+  // Tallas: las casillas estándar en su orden y luego las «otras» escritas a mano, sin repetir.
+  const pickSizes = (std, checked, other) => { const out = std.filter(z => checked.includes(z)); csv(other).forEach(z => { if (!out.includes(z)) out.push(z); }); return out; };
+  // Si todas las tallas grandes cuestan precio + el mismo extra, se muestra ese extra; si no, el mapa queda en «Más opciones».
+  function extraFromMap(price, map) {
+    const ks = Object.keys(map || {}); if (!ks.length || price == null) return null;
+    if (!ks.every(k => BIG_SIZES.includes(k))) return null;
+    const d = ks.map(k => Number(map[k]) - Number(price)); return d.every(x => x === d[0] && x > 0) ? d[0] : null;
+  }
+  // Al editar, el modelo con el mismo código conserva su id: los pedidos ya guardados lo usan.
+  const keepModelIds = (models, existing) => { const prev = (existing && existing.models) || []; const used = {};
+    return models.map(m => { const o = prev.find(x => x.code === m.code && !used[x.id]); if (o) { used[o.id] = true; return { ...m, id: o.id }; } return m; }); };
+  // Arma el objeto que recibe admin_save_product (misma forma que las prendas de Harder).
+  function buildProduct(existing, uploaded) {
+    const f = A.f, G = A.g, up = uploaded || {};
+    const es = (f.pr_es || '').trim(), en = (f.pr_en || '').trim();
+    if (!es && !en) return { err: T('msgGarmentName') };
+    const used = {};
+    const colors = [];
+    for (const c of G.colors) {
+      const bits = (c.name || '').split('/').map(x => x.trim()).filter(Boolean);
+      if (!bits.length) continue;
+      const cEs = bits[0], cEn = bits[1] || bits[0];
+      let id = c.id || slug(cEn), n = 2; while (used[id]) id = (c.id || slug(cEn)) + '-' + n++;
+      used[id] = true;
+      const out = { id, es: cEs, en: cEn, sw: /^#[0-9a-f]{6}$/i.test(c.sw) ? c.sw : '#cccccc' };
+      const ph = up[c.uid] !== undefined ? up[c.uid] : c.photo;
+      if (ph) out.photo = ph;
+      if (c.flag) out.flag = true;
+      colors.push(out);
+    }
+    if (!colors.length) return { err: T('msgGarmentColor') };
+    const child = pickSizes(KID_SIZES, G.child, f.pr_child_other), adult = pickSizes(ADULT_SIZES, G.adult, f.pr_adult_other);
+    if (!child.length && !adult.length) return { err: T('msgGarmentSize') };
+    if (child.length > 24 || adult.length > 24) return { err: T('msgProductInvalid') };
+    const price = num(f.pr_price || ''); if (price === undefined || (price !== null && price < 0)) return { err: T('msgQty') };
+    const map = {};
+    if ((f.pr_map || '').trim()) {
+      for (const pair of csv(f.pr_map)) { const [k, v] = pair.split(':'); const n2 = Number(v); if (!k || !k.trim() || v === undefined || isNaN(n2)) return { err: T('msgQty') }; map[k.trim()] = n2; }
+    } else if ((f.pr_extra || '').trim()) {
+      const x = num(f.pr_extra); if (x === undefined || x === null || x < 0) return { err: T('msgQty') };
+      if (price !== null && x > 0) adult.filter(z => BIG_SIZES.includes(z)).forEach(z => { map[z] = Math.round((price + x) * 100) / 100; });
+    }
+    const mainPhoto = up.main !== undefined ? up.main : (f.pr_photo || '').trim();
+    const photo = mainPhoto || (colors.find(c => c.photo) || {}).photo || '';
+    let key = existing ? existing.key : slug(f.pr_code || en || es);
+    if (!existing) { const taken = D().products.filter(x => x.period_id === A.cfg).map(x => x.key); const base = key; let n3 = 2; while (taken.includes(key)) key = base + '-' + n3++; }
+    return { product: { key, category: f.pr_cat === 'staff' ? 'staff' : 'school', name: { es: es || en, en: en || es }, design: (f.pr_design || '').trim(), personalization: f.pr_pers || 'none', base_price: price, price_map: map,
+      ages: [child.length ? 'child' : '', adult.length ? 'adult' : ''].filter(Boolean), sizes: { child, adult }, colors, models: keepModelIds(parseModels(f), existing), photo, enabled: existing ? existing.enabled : true, sort: existing ? existing.sort : 500 } };
+  }
+
 
   // ---- validaciones previas a abrir (el servidor las repite) ----
   function validate(p) {
@@ -210,7 +292,7 @@
       <div class="grid"><label>${T('name')}<input data-k="sc_name" value="${esc(f.sc_name)}"/></label><label>${T('collector')}<input data-k="sc_collector" value="${esc(f.sc_collector)}"/></label><label>${T('contactData')}<input data-k="sc_contact" value="${esc(f.sc_contact)}"/></label></div>
       ${logoBox}${fresh}<div class="row"><button class="btn" data-act="saveSchool" ${A.logoBusy ? 'disabled' : ''}>${A.logoBusy ? T('uploadingLogo') : T('save')}</button><button type="button" class="lk" data-act="cancelSchool" ${A.logoBusy ? 'disabled' : ''}>${T('cancel')}</button></div></div>` : '';
     const schools = `<div class="card col"><div class="row between"><h2>${T('nSchoolsOnly')}</h2><button class="btn" data-act="newSchool">+ ${T('addSchool')}</button></div>${form}<div class="scroll"><table><thead><tr><th>${T('name')}</th><th>${T('collector')}</th><th>${T('contactData')}</th><th></th></tr></thead><tbody>
-      ${D().schools.map(s => `<tr><td><b>${esc(s.name)}</b></td><td>${esc(s.collector)}</td><td>${esc(s.contact)}</td><td><button type="button" class="lk" data-act="editSchool" data-id="${s.id}">${T('edit')}</button></td></tr>`).join('')}</tbody></table></div></div>`;
+      ${D().schools.map(s => `<tr><td><b>${esc(s.name)}</b></td><td>${esc(s.collector)}</td><td>${esc(s.contact)}</td><td><div class="row" style="gap:4px 14px"><button type="button" class="btn sm" data-act="openGarments" data-id="${s.id}">${T('garmentsTeachers')}</button><button type="button" class="lk" data-act="editSchool" data-id="${s.id}">${T('edit')}</button></div></td></tr>`).join('')}</tbody></table></div></div>`;
     const blocks = D().schools.filter(s => A.fSchool === 'all' || s.id === A.fSchool).map(s => {
       const nf = A.newFor === s.id ? `<div class="stack col"><h3>${T('newPeriod')}</h3><div class="grid"><label>${T('openFrom')}<input type="date" data-k="np_open" value="${esc(f.np_open)}"/></label><label>${T('openUntil')}<input type="date" data-k="np_close" value="${esc(f.np_close)}"/></label>
         <label>${T('mode')}<select data-k="np_mode">${opts([{ v: 'coord', l: T('mCoord') }, { v: 'each', l: T('mEach') }, { v: 'mixed', l: T('mMixed') }], f.np_mode || 'mixed')}</select></label></div><div class="muted">${T('copyNote')}</div>
@@ -218,47 +300,84 @@
       return `<div class="card col"><div class="row between"><h2>${esc(s.name)}</h2><button class="btn sm" data-act="newPeriod" data-id="${s.id}">+ ${T('newPeriod')}</button></div>${nf}<div class="scroll"><table><thead><tr><th>${T('dates')}</th><th>${T('mode')}</th><th>${T('status')}</th><th>${T('publicLink')}</th><th></th></tr></thead><tbody>
         ${D().periods.filter(p => p.school_id === s.id).map(p => `<tr><td><b>${rng(p)}</b></td><td>${T(p.mode === 'mixed' ? 'mMixed' : p.mode === 'coord' ? 'mCoord' : 'mEach')}</td>
         <td><div class="row" style="gap:8px"><select data-act="setStatus" data-id="${p.id}" style="width:200px">${opts([{ v: 'pending', l: T('stPending') }, { v: 'open', l: T('stOpen') }, { v: 'closed', l: T('stClosed') }], p.status)}</select><span class="muted">${stl(p)}</span></div></td>
-        <td><button class="lk" data-act="copyLink" data-id="${p.id}">${T('copyLink')}</button><div class="muted">?p=${esc(p.slug)}</div></td><td><button type="button" class="lk" data-act="cfg" data-id="${p.id}">${T('configure')}</button></td></tr>`).join('')}</tbody></table></div></div>`;
+        <td><button class="lk" data-act="copyLink" data-id="${p.id}">${T('copyLink')}</button><div class="muted">?p=${esc(p.slug)}</div></td><td><button type="button" class="lk" data-act="cfg" data-id="${p.id}">${T('garmentsTeachers')}</button></td></tr>`).join('')}</tbody></table></div></div>`;
     }).join('');
     return schools + blocks + cfgPanel();
   }
   function cfgPanel() {
     const p = A.cfg && D().per[A.cfg]; if (!p) return '';
+    const s = D().sch[p.school_id] || {};
     const v = validate(p), f = A.f, gs = D().groups.filter(g => g.period_id === p.id), ps = D().products.filter(x => x.period_id === p.id).sort((a, b) => a.sort - b.sort), log = D().logs.filter(x => x.period_id === p.id);
-    const pfv = (x, k, d) => (A.pf[x.id] && A.pf[x.id][k] !== undefined) ? A.pf[x.id][k] : d;
-    const prodRowsH = ps.map(x => { const map = Object.entries(x.price_map || {}).map(([k, v2]) => k + ':' + v2).join(', ');
-      return `<tr><td style="width:60px">${x.photo ? `<img class="thumb" src="${esc(x.photo)}" alt=""/>` : ''}</td><td><b>${esc(loc(x.name))}</b><div class="muted">${T(x.category === 'school' ? 'catSchool' : 'catStaff')} ${esc((x.models || []).map(m => m.code).join(' / '))}</div>${x.sizes_pending ? `<div class="warn">${T('sizesTbd')}</div>` : (x.pending_sizes || []).length ? `<div class="warn">${T('wSizes').replace('{n}', x.pending_sizes.join('/'))}</div>` : ''}<button class="btn ghost sm" data-act="editGarment" data-id="${x.id}">${T('editGarment')}</button></td>
-      <td style="font-size:13px">${esc(x.colors.map(c => loc(c)).join(', '))}<div style="margin-top:6px;grid-template-columns:1fr 1fr" class="grid"><label>${T('youth')}<input data-m="pf" data-k="${x.id}:child" value="${esc(pfv(x, 'child', (x.sizes.child || []).join(', ')))}"/></label><label>${T('adultW')}<input data-m="pf" data-k="${x.id}:adult" value="${esc(pfv(x, 'adult', (x.sizes.adult || []).join(', ')))}"/></label></div></td>
-      <td><div class="col" style="gap:6px"><label>${T('refPrice')}<input class="sm" data-m="pf" data-k="${x.id}:price" value="${esc(pfv(x, 'price', x.base_price == null ? '' : x.base_price))}" inputmode="decimal"/></label><label>${T('priceMapLbl')}<input data-m="pf" data-k="${x.id}:map" value="${esc(pfv(x, 'map', map))}" placeholder="2XL:14, 3XL:16"/></label><button class="btn sec sm" data-act="saveProduct" data-id="${x.id}">${T('save')}</button></div></td>
-      <td><input type="checkbox" data-act="toggleProduct" data-id="${x.id}" ${x.enabled ? 'checked' : ''}/></td></tr>`; }).join('');
-    return `<div class="card col"><div class="row between"><div><div class="eyebrow">${T('configure')}</div><h2>${esc(pname(p))}</h2></div><button class="lk" data-act="closeCfg">${T('close2')} ✕</button></div>
-      <div class="note col"><b>${T('validation')}</b>${v.e.length ? '' : `<div class="ok">${T('validOk')}</div>`}${v.e.map(t => `<div class="err">• ${esc(t)}</div>`).join('')}${v.w.map(t => `<div class="warn">• ${esc(t)}</div>`).join('')}</div>
-      <div class="col" style="gap:6px"><b>${T('publicLink')}</b><input readonly value="${esc(publicUrl(p))}" onclick="this.select()"/></div>
-      <h3>${T('editDates')}</h3><div class="grid"><label>${T('openFrom')}<input type="date" data-k="ed_open" value="${esc(f.ed_open)}"/></label><label>${T('openUntil')}<input type="date" data-k="ed_close" value="${esc(f.ed_close)}"/></label></div>
-      <div class="row"><button class="btn sec sm" data-act="saveDates">${T('saveDates')}</button></div>${log.length ? `<div class="muted"><b>${T('dateLog')}</b>${log.map(h => `<div>${fdt(h.at)} · ${esc(h.by_email || '')} · ${esc(h.detail)}</div>`).join('')}</div>` : ''}
-      <h3>${T('groups')}</h3><div class="scroll"><table><thead><tr><th>${T('teacher')}</th><th>${T('grade')}</th><th>${T('room')}</th><th></th></tr></thead><tbody>${gs.map(g => `<tr><td>${esc(g.teacher)}</td><td>${esc(g.grade) || '—'}</td><td>${esc(g.room) || '—'}</td><td><button class="lk" data-act="delGroup" data-id="${g.id}">${T('remove')}</button></td></tr>`).join('')}</tbody></table></div>
-      <div class="grid"><label>${T('teacher')}<input data-k="gr_teacher" value="${esc(f.gr_teacher)}"/></label><label>${T('grade')}<input data-k="gr_grade" value="${esc(f.gr_grade)}"/></label><label>${T('room')}<input data-k="gr_room" value="${esc(f.gr_room)}"/></label></div><div class="row"><button class="btn sec sm" data-act="addGroup">+ ${T('addGroup')}</button></div>
-      <h3>${T('catalog')}</h3><div class="scroll"><table><thead><tr><th></th><th>${T('product')}</th><th>${T('catVariants')}</th><th>${T('refPrice')}</th><th>${T('available')}</th></tr></thead><tbody>${prodRowsH}</tbody></table></div><div class="muted">${T('priceNote')}</div>
-      ${garmentForm(f)}</div>`;
+    const done = [!!s.logo_path, ps.some(x => x.enabled && !x.sizes_pending), gs.length > 0, eff(p) === 'open'];
+    const stepKeys = ['stepData', 'stepGarments', 'stepTeachers', 'stepOpen'];
+    const pills = stepKeys.map((k, i) => `<button type="button" class="step-pill ${done[i] ? 'ok' : ''}" data-act="goStep" data-v="${i + 1}"><b>${i + 1}</b> ${T(k)}${done[i] ? ' ✓' : ''}</button>`).join('');
+    const head = n => `<h3 class="step-h"><span>${n}</span> ${T(stepKeys[n - 1])}</h3>`;
+    const sizesTxt = x => [['child', 'youth'], ['adult', 'adultW']].map(([k, l]) => (x.sizes && x.sizes[k] || []).length ? T(l) + ': ' + x.sizes[k].join(' ') : '').filter(Boolean).join(' · ');
+    const prodList = ps.length ? `<div class="scroll"><table><thead><tr><th></th><th>${T('product')}</th><th>${T('catVariants')}</th><th class="num">${T('refPrice')}</th><th>${T('available')}</th></tr></thead><tbody>${ps.map(x => `<tr>
+      <td style="width:60px">${x.photo ? `<img class="thumb" src="${esc(x.photo)}" alt=""/>` : `<span class="muted">${T('photoTbd')}</span>`}</td>
+      <td><b>${esc(loc(x.name))}</b><div class="muted">${T(x.category === 'staff' ? 'catStaff' : 'catSchool')} ${esc((x.models || []).map(m => m.code).join(' / '))}</div><button type="button" class="lk" data-act="editGarment" data-id="${x.id}">${T('editGarment')}</button></td>
+      <td><div class="row" style="gap:6px">${(x.colors || []).map(c => `<span class="sw-dot" title="${esc(loc(c))}" style="background:${esc(c.sw || '#ccc')}"></span>`).join('')}<span class="muted">${esc((x.colors || []).map(c => loc(c)).join(', '))}</span></div><div class="muted">${esc(sizesTxt(x))}</div></td>
+      <td class="num">${x.base_price == null ? T('priceTbd') : money(x.base_price)}</td>
+      <td><input type="checkbox" data-act="toggleProduct" data-id="${x.id}" ${x.enabled ? 'checked' : ''} aria-label="${esc(T('available'))}"/></td></tr>`).join('')}</tbody></table></div>` : `<div class="muted">${T('noGarmentsYet')}</div>`;
+    const link = publicUrl(p);
+    return `<div class="card col" id="cfg"><div class="row between"><div><div class="eyebrow">${T('garmentsTeachers')}</div><h2>${esc(T('garmentsOf').replace('{s}', s.name || ''))}</h2><div class="muted">${rng(p)}</div></div><button class="lk" data-act="closeCfg">${T('close2')} ✕</button></div>
+      <div class="row step-pills">${pills}</div>
+      <div class="col" id="cfg-1">${head(1)}<div class="row" style="align-items:center">${s.logo_path ? `<img class="logo-preview" src="${esc(logoSrc(s.logo_path))}" alt="${esc(s.name)}"/>` : `<span class="muted">${T('noLogoYet')}</span>`}<div><b>${esc(s.name || '')}</b><div class="muted">${esc([s.collector, s.contact].filter(Boolean).join(' · '))}</div></div></div>
+        <button type="button" class="lk" data-act="editSchool" data-id="${s.id}">${T('editDataLogo')}</button></div>
+      <div class="col" id="cfg-2">${head(2)}${prodList}${garmentForm(f)}</div>
+      <div class="col" id="cfg-3">${head(3)}<div class="scroll"><table><thead><tr><th>${T('teacher')}</th><th>${T('grade')}</th><th>${T('room')}</th><th></th></tr></thead><tbody>${gs.map(g => `<tr><td>${esc(g.teacher)}</td><td>${esc(g.grade) || '—'}</td><td>${esc(g.room) || '—'}</td><td><button class="lk" data-act="delGroup" data-id="${g.id}">${T('remove')}</button></td></tr>`).join('')}</tbody></table></div>
+        <div class="grid"><label>${T('teacher')}<input data-k="gr_teacher" value="${esc(f.gr_teacher || '')}"/></label><label>${T('grade')}<input data-k="gr_grade" value="${esc(f.gr_grade || '')}"/></label><label>${T('room')}<input data-k="gr_room" value="${esc(f.gr_room || '')}"/></label></div><div class="row"><button class="btn sec sm" data-act="addGroup">+ ${T('addGroup')}</button></div></div>
+      <div class="col" id="cfg-4">${head(4)}
+        <div class="note col"><b>${T('validation')}</b>${v.e.length ? '' : `<div class="ok">${T('validOk')}</div>`}${v.e.map(t => `<div class="err">• ${esc(t)}</div>`).join('')}${v.w.map(t => `<div class="warn">• ${esc(t)}</div>`).join('')}</div>
+        <label>${T('status')}<select data-act="setStatus" data-id="${p.id}" style="max-width:260px">${opts([{ v: 'pending', l: T('stPending') }, { v: 'open', l: T('stOpen') }, { v: 'closed', l: T('stClosed') }], p.status)}</select></label>
+        <div class="grid"><label>${T('openFrom')}<input type="date" data-k="ed_open" value="${esc(f.ed_open)}"/></label><label>${T('openUntil')}<input type="date" data-k="ed_close" value="${esc(f.ed_close)}"/></label></div>
+        <div class="row"><button class="btn sec sm" data-act="saveDates">${T('saveDates')}</button></div>${log.length ? `<div class="muted"><b>${T('dateLog')}</b>${log.map(h => `<div>${fdt(h.at)} · ${esc(h.by_email || '')} · ${esc(h.detail)}</div>`).join('')}</div>` : ''}
+        <div class="col" style="gap:6px"><b>${T('publicLink')}</b><input readonly value="${esc(link)}" onclick="this.select()"/>
+          <div class="row"><button class="btn sm" data-act="copyLink" data-id="${p.id}">${T('copyLink')}</button><a class="btn sec sm" href="${esc(link)}" target="_blank" rel="noopener">${T('previewParents')}</a></div></div>
+        <div class="col" style="gap:6px"><b>${T('iframeTitle')}</b><div class="muted">${T('iframeHint')}</div><textarea readonly rows="3" id="iframe-snippet" onclick="this.select()">${esc(iframeSnippet(p))}</textarea>
+          <div class="row"><button class="btn sec sm" data-act="copyIframe" data-id="${p.id}">${T('copyIframe')}</button></div></div></div></div>`;
   }
+  const iframeSnippet = p => `<iframe src="${publicUrl(p)}" title="Preórdenes escolares" style="width:100%;height:1400px;border:0;display:block;"></iframe>`;
   function garmentForm(f) {
-    const editing = !!A.editProd;
+    const editing = !!A.editProd, G = A.g, busy = G.busy;
+    const mainSrc = G.photoPreview || (f.pr_photo || '').trim();
+    const sizeBoxes = (age, list) => list.map(z => `<label class="szbox"><input type="checkbox" data-act="toggleSize" data-v="${age}:${esc(z)}" ${G[age].includes(z) ? 'checked' : ''}/> ${esc(z)}</label>`).join('');
+    const colorRows = G.colors.map(c => {
+      const ph = c.preview || c.photo;
+      return `<div class="row color-row" style="align-items:center">
+        <input type="color" class="swatch-pick" data-gc="${c.uid}:sw" value="${esc(/^#[0-9a-f]{6}$/i.test(c.sw) ? c.sw : '#cccccc')}" aria-label="${esc(T('colorPick'))}"/>
+        <input data-gc="${c.uid}:name" value="${esc(c.name)}" placeholder="${esc(T('colorNamePh'))}" style="flex:1 1 180px;max-width:280px" aria-label="${esc(T('colorName'))}"/>
+        ${ph ? `<img class="thumb" src="${esc(ph)}" alt=""/>` : ''}
+        <label class="lk filebtn-lk">${ph ? T('changeColorPhoto') : T('colorPhoto')}<input class="filepick" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" data-gcphoto="${c.uid}" ${busy ? 'disabled' : ''}/></label>
+        ${ph ? `<button type="button" class="lk" data-act="clearColorPhoto" data-id="${c.uid}">${T('remove')}</button>` : ''}
+        ${G.colors.length > 1 ? `<button type="button" class="lk" data-act="delColor" data-id="${c.uid}" aria-label="${esc(T('removeColor'))}">✕</button>` : ''}</div>`;
+    }).join('');
     const extra = A.more.garment ? `<div class="grid">
-        <label>${T('modelEs')}<input data-k="pr_mes" value="${esc(f.pr_mes)}"/></label><label>${T('modelEn')}<input data-k="pr_men" value="${esc(f.pr_men)}"/></label>
-        <label>${T('priceMapLbl')}<input data-k="pr_map" value="${esc(f.pr_map)}" placeholder="2XL:14, 3XL:16"/></label><label>${T('design')}<input data-k="pr_design" value="${esc(f.pr_design)}"/></label>
-        <label>${T('photoPath')}<input data-k="pr_photo" value="${esc(f.pr_photo)}" placeholder="assets/img/sleeve-black.jpg"/></label>
-        <label>${T('pers')}<select data-k="pr_pers">${opts([{ v: 'none', l: T('pNone') }, { v: 'name', l: T('pName') }, { v: 'nameNumber', l: T('pNameNum') }], f.pr_pers || 'none')}</select></label></div>
+        <label>${T('nameEn')}<input data-k="pr_en" value="${esc(f.pr_en || '')}"/></label>
+        <label>${T('modelCode')}<input data-k="pr_code" value="${esc(f.pr_code || '')}" placeholder="ST941"/></label>
+        <label>${T('modelEs')}<input data-k="pr_mes" value="${esc(f.pr_mes || '')}"/></label><label>${T('modelEn')}<input data-k="pr_men" value="${esc(f.pr_men || '')}"/></label>
+        <label>${T('design')}<input data-k="pr_design" value="${esc(f.pr_design || '')}"/></label>
+        <label>${T('pers')}<select data-k="pr_pers">${opts([{ v: 'none', l: T('pNone') }, { v: 'name', l: T('pName') }, { v: 'nameNumber', l: T('pNameNum') }], f.pr_pers || 'none')}</select></label>
+        <label>${T('priceMapLbl')}<input data-k="pr_map" value="${esc(f.pr_map || '')}" placeholder="2XL:14, 3XL:16"/></label>
+        <label>${T('photoPath')}<input data-k="pr_photo" value="${esc(f.pr_photo || '')}" placeholder="assets/img/sleeve-black.jpg"/></label></div>
         <label>${T('moreModels')}<textarea data-k="pr_more" rows="3" placeholder="ST941 | Hombre | Men">${esc(f.pr_more || '')}</textarea></label>
-        <div class="muted">${T('photoSlot')}</div>` : '';
-    return `<div id="garment-form" class="stack col"><h3>${editing ? T('editGarment') : T('addProduct')}</h3><div class="grid">
-        <label>${T('nameEs')}<input data-k="pr_es" value="${esc(f.pr_es)}"/></label><label>${T('nameEn')}<input data-k="pr_en" value="${esc(f.pr_en)}"/></label>
-        <label>${T('category')}<select data-k="pr_cat">${opts([{ v: 'school', l: T('catSchool') }, { v: 'staff', l: T('catStaff') }], f.pr_cat || 'school')}</select></label>
-        <label>${T('modelCode')}<input data-k="pr_code" value="${esc(f.pr_code)}" placeholder="ST941"/></label>
-        <label>${T('colorsCsv')}<input data-k="pr_colors" value="${esc(f.pr_colors)}" placeholder="Negro / Black, Granate / Maroon"/></label><label>${T('childCsv')}<input data-k="pr_child" value="${esc(f.pr_child)}" placeholder="XS, S, M, L, XL"/></label><label>${T('adultCsv')}<input data-k="pr_adult" value="${esc(f.pr_adult)}" placeholder="S, M, L, XL, 2XL"/></label>
-        <label>${T('refPrice')}<input data-k="pr_price" value="${esc(f.pr_price)}" inputmode="decimal"/></label></div>
-        <div class="muted">${T('colorsHint')}</div>
-        <button type="button" class="lk" data-act="toggleMore" data-more="garment">${A.more.garment ? T('lessOpts') : T('moreOpts')}</button>${extra}
-        <div class="row"><button class="btn" data-act="addProduct">${editing ? T('save') : '+ ' + T('addProduct')}</button>${editing ? `<button type="button" class="lk" data-act="cancelGarment">${T('cancel')}</button>` : ''}</div></div>`;
+        <div class="muted">${T('priceMapHint')}</div>` : '';
+    return `<div id="garment-form" class="stack col garment-form"><h3>${editing ? T('editGarment') : '+ ' + T('addProduct')}</h3>
+      <div class="grid"><label>${T('garmentName')}<input data-k="pr_es" value="${esc(f.pr_es || '')}" placeholder="${esc(T('garmentNamePh'))}"/></label>
+        <label>${T('garmentFor')}<select data-k="pr_cat">${opts([{ v: 'school', l: T('catSchool') }, { v: 'staff', l: T('catStaff') }], f.pr_cat || 'school')}</select></label></div>
+      <div class="col" style="gap:8px"><span class="flabel">${T('garmentPhoto')}</span><div class="row" style="align-items:center">
+        ${mainSrc ? `<img class="photo-preview" src="${esc(mainSrc)}" alt="${esc(T('garmentPhoto'))}"/>` : `<div class="photo-empty muted">${T('photoTbd')}</div>`}
+        <label class="filebtn upload-big">${T('uploadPhoto')}<input class="filepick" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" data-gphoto aria-label="${esc(T('uploadPhoto'))}" ${busy ? 'disabled' : ''}/></label>
+        ${mainSrc ? `<button type="button" class="lk" data-act="clearGarmentPhoto">${T('remove')}</button>` : ''}</div><div class="muted">${T('photoHint')}</div></div>
+      <div class="col" style="gap:8px"><span class="flabel">${T('colorsTitle')}</span>${colorRows}<button type="button" class="lk" data-act="addColor">+ ${T('addColor')}</button><div class="muted">${T('colorsHint2')}</div></div>
+      <div class="col" style="gap:8px"><span class="flabel">${T('sizesTitle')}</span>
+        <div class="row szrow"><b class="szlbl">${T('kidSizes')}</b>${sizeBoxes('child', KID_SIZES)}<input data-k="pr_child_other" value="${esc(f.pr_child_other || '')}" placeholder="${esc(T('otherSizesPh'))}" aria-label="${esc(T('otherSizes'))}" style="max-width:200px"/></div>
+        <div class="row szrow"><b class="szlbl">${T('adultSizes')}</b>${sizeBoxes('adult', ADULT_SIZES)}<input data-k="pr_adult_other" value="${esc(f.pr_adult_other || '')}" placeholder="${esc(T('otherSizesPh'))}" aria-label="${esc(T('otherSizes'))}" style="max-width:200px"/></div></div>
+      <div class="grid"><label>${T('priceLbl')}<input data-k="pr_price" value="${esc(f.pr_price || '')}" inputmode="decimal" placeholder="13"/></label>
+        <label>${T('bigExtra')}<input data-k="pr_extra" value="${esc(f.pr_extra || '')}" inputmode="decimal" placeholder="2"/></label></div>
+      ${G.err ? `<div class="err" role="alert">${esc(G.err)}</div>` : ''}
+      <button type="button" class="lk" data-act="toggleMore" data-more="garment">${A.more.garment ? T('lessOpts') : T('moreOpts')}</button>${extra}
+      <div class="row"><button class="btn" data-act="addProduct" ${busy ? 'disabled' : ''}>${busy ? T('uploadingPhoto') : editing ? T('save') : '+ ' + T('addProduct')}</button>${editing ? `<button type="button" class="lk" data-act="cancelGarment">${T('cancel')}</button>` : ''}</div></div>`;
   }
 
   function vOrders() {
@@ -539,6 +658,7 @@
   }
 
   // ---- acciones ----
+  const focusSchoolForm = () => { const i = document.querySelector('[data-k="sc_name"]'); if (i) { i.scrollIntoView({ block: 'center' }); i.focus({ preventScroll: true }); } };
   const num = s => { const n = String(s).trim() === '' ? null : Number(s); return n !== null && isNaN(n) ? undefined : n; };
   const acts = {
     lang: el => { JK.setLang(el.dataset.v); A.rLang = el.dataset.v; render(); },
@@ -602,8 +722,8 @@
       render();
     },
     logout: async () => { clearRecovery(); A.gate = ''; await sb().auth.signOut(); A.user = null; A.ok = false; A.D = null; render(); },
-    newSchool: () => { A.schoolForm = 'new'; A.editProd = null; resetLogoPick(); Object.assign(A.f, { sc_name: '', sc_collector: '', sc_contact: '', sc_logo: '', sc_open: todayLA(), sc_close: '', sc_mode: 'mixed', sc_groups_text: '' }); render(); },
-    editSchool: el => { const s = D().sch[el.dataset.id]; A.schoolForm = s.id; resetLogoPick(); Object.assign(A.f, { sc_name: s.name, sc_collector: s.collector, sc_contact: s.contact, sc_logo: s.logo_path || '' }); render(); },
+    newSchool: () => { A.schoolForm = 'new'; A.editProd = null; resetLogoPick(); Object.assign(A.f, { sc_name: '', sc_collector: '', sc_contact: '', sc_logo: '', sc_open: todayLA(), sc_close: '', sc_mode: 'mixed', sc_groups_text: '' }); render(); focusSchoolForm(); },
+    editSchool: el => { const s = D().sch[el.dataset.id]; A.view = 'schools'; A.schoolForm = s.id; resetLogoPick(); Object.assign(A.f, { sc_name: s.name, sc_collector: s.collector, sc_contact: s.contact, sc_logo: s.logo_path || '' }); render(); focusSchoolForm(); },
     cancelSchool: () => { A.schoolForm = null; resetLogoPick(); render(); },
     toggleLogo: () => { if (A.logoBusy) return; A.logoOpen = true; render(); const box = document.getElementById('logo-editor'); if (box) box.scrollIntoView({ block: 'nearest' }); },
     clearLogo: () => { if (A.logoBusy) return; revokeLogoPreview(); A.logoFile = null; A.f.sc_logo = ''; A.logoErr = ''; A.logoOpen = true; render(); },
@@ -640,7 +760,7 @@
       const r = await rpc('admin_create_period', { p_school: el.dataset.id, p_open: f.np_open, p_close: f.np_close, p_mode: f.np_mode || 'mixed' }); if (r.error) return; A.newFor = null; await loadAll(); acts.cfg({ dataset: { id: r.data } }); toast(T('msgCreated')); },
     setStatus: async el => { const r = await rpc('admin_set_period_status', { p_period: el.dataset.id, p_status: el.value }); await loadAll(); if (!r.error) toast(T('msgSaved')); },
     copyLink: async el => { const u = publicUrl(D().per[el.dataset.id]); try { await navigator.clipboard.writeText(u); toast(T('copied')); } catch (e) { prompt(T('publicLink'), u); } },
-    cfg: el => { const p = D().per[el.dataset.id]; A.cfg = p.id; A.f.ed_open = p.open_date; A.f.ed_close = p.close_date; render(); }, closeCfg: () => { A.cfg = null; render(); },
+    cfg: el => { const p = D().per[el.dataset.id]; if (A.cfg !== p.id) { A.editProd = null; blankGarment(); } A.cfg = p.id; A.f.ed_open = p.open_date; A.f.ed_close = p.close_date; render(); const b = document.getElementById('cfg'); if (b) b.scrollIntoView({ block: 'start' }); }, closeCfg: () => { A.cfg = null; render(); },
     saveDates: async () => { if (!A.f.ed_open || !A.f.ed_close || A.f.ed_close < A.f.ed_open) return toast(T('dateErr')); const r = await rpc('admin_update_dates', { p_period: A.cfg, p_open: A.f.ed_open, p_close: A.f.ed_close }); await loadAll(); if (!r.error) toast(T('msgSaved')); },
     addGroup: async () => { const f = A.f; if (!(f.gr_teacher || '').trim()) return; const { error } = await sb().from('groups').insert({ period_id: A.cfg, teacher: f.gr_teacher.trim(), grade: f.gr_grade || '', room: f.gr_room || '', sort: 999 }); if (error) return toast(errMsg(error)); Object.assign(f, { gr_teacher: '', gr_grade: '', gr_room: '' }); await loadAll(); },
     delGroup: async el => { const { error } = await sb().from('groups').delete().eq('id', el.dataset.id); if (error) return toast(T('msgGroupUsed')); await loadAll(); },
@@ -654,30 +774,54 @@
       const r = await rpc('admin_save_product', { p_period: x.period_id, p_id: x.id, p_product: product }); if (r.error) return; delete A.pf[x.id]; await loadAll(); toast(T('msgSaved')); },
     editGarment: el => {
       const x = D().prod[el.dataset.id], models = x.models || [], first = models[0] || {};
+      blankGarment();
       A.editProd = x.id;
+      const ch = (x.sizes && x.sizes.child) || [], ad = (x.sizes && x.sizes.adult) || [];
+      const ex = extraFromMap(x.base_price == null ? null : Number(x.base_price), x.price_map);
       Object.assign(A.f, {
         pr_es: (x.name && x.name.es) || '', pr_en: (x.name && x.name.en) || '', pr_cat: x.category || 'school',
-        pr_colors: (x.colors || []).map(c => c.es && c.en && c.es !== c.en ? c.es + ' / ' + c.en : (c.es || c.en || '')).join(', '),
-        pr_child: ((x.sizes && x.sizes.child) || []).join(', '), pr_adult: ((x.sizes && x.sizes.adult) || []).join(', '),
+        pr_child_other: ch.filter(z => !KID_SIZES.includes(z)).join(', '), pr_adult_other: ad.filter(z => !ADULT_SIZES.includes(z)).join(', '),
         pr_price: x.base_price == null ? '' : String(x.base_price), pr_design: x.design || '', pr_pers: x.personalization || 'none', pr_photo: x.photo || '',
         pr_code: first.code || '', pr_mes: (first.label && first.label.es) || '', pr_men: (first.label && first.label.en) || '',
         pr_more: models.slice(1).map(m => [m.code, (m.label && m.label.es) || '', (m.label && m.label.en) || ''].filter(Boolean).join(' | ')).join('\n'),
-        pr_map: Object.entries(x.price_map || {}).map(([k, v]) => k + ':' + v).join(', ')
+        pr_extra: ex == null ? '' : String(ex),
+        pr_map: ex == null ? Object.entries(x.price_map || {}).map(([k, v]) => k + ':' + v).join(', ') : ''
       });
+      A.g.child = ch.filter(z => KID_SIZES.includes(z)); A.g.adult = ad.filter(z => ADULT_SIZES.includes(z));
+      A.g.colors = (x.colors || []).length ? x.colors.map((c, i) => newColor(i, c)) : [newColor(0)];
+      if (A.f.pr_map) A.more.garment = true;
       render();
-      const box = document.getElementById('garment-form'); if (box) box.scrollIntoView({ block: 'center' });
+      const box = document.getElementById('garment-form'); if (box) box.scrollIntoView({ block: 'start' });
     },
     cancelGarment: () => { A.editProd = null; blankGarment(); render(); },
+    addColor: () => { A.g.colors.push(newColor(A.g.colors.length)); render(); },
+    delColor: el => { const c = A.g.colors.find(x => x.uid === el.dataset.id); if (c && c.preview) { try { URL.revokeObjectURL(c.preview); } catch (e) {} } A.g.colors = A.g.colors.filter(x => x.uid !== el.dataset.id); if (!A.g.colors.length) A.g.colors.push(newColor(0)); render(); },
+    clearColorPhoto: el => { const c = A.g.colors.find(x => x.uid === el.dataset.id); if (!c) return; if (c.preview) { try { URL.revokeObjectURL(c.preview); } catch (e) {} } c.preview = ''; c.file = null; c.photo = ''; render(); },
+    clearGarmentPhoto: () => { if (A.g.photoPreview) { try { URL.revokeObjectURL(A.g.photoPreview); } catch (e) {} } A.g.photoPreview = ''; A.g.photoFile = null; A.f.pr_photo = ''; render(); },
+    toggleSize: el => { const [age, z] = el.dataset.v.split(':'); const list = A.g[age]; A.g[age] = el.checked ? (list.includes(z) ? list : list.concat(z)) : list.filter(x => x !== z); },
+    goStep: el => { const b = document.getElementById('cfg-' + el.dataset.v); if (b) b.scrollIntoView({ block: 'start', behavior: 'smooth' }); },
+    openGarments: el => { const p = D().periods.filter(x => x.school_id === el.dataset.id).sort((a, b) => b.open_date.localeCompare(a.open_date))[0]; if (!p) return toast(T('noPeriodYet')); A.fSchool = 'all'; acts.cfg({ dataset: { id: p.id } }); },
+    copyIframe: async el => { const u = iframeSnippet(D().per[el.dataset.id]); try { await navigator.clipboard.writeText(u); toast(T('iframeCopied')); } catch (e) { const t = document.getElementById('iframe-snippet'); if (t) t.select(); } },
     addProduct: async () => {
+      if (A.g.busy) return;
       const existing = A.editProd ? D().prod[A.editProd] : null;
-      const child = csv(A.f.pr_child), adult = csv(A.f.pr_adult), colors = parseColors(A.f.pr_colors, existing);
-      if (!(A.f.pr_es || A.f.pr_en) || !colors.length || (!child.length && !adult.length)) return toast(T('msgProductInvalid'));
-      const price = num(A.f.pr_price || ''); if (price === undefined) return toast(T('msgQty'));
-      const map = {};
-      if ((A.f.pr_map || '').trim()) { for (const pair of csv(A.f.pr_map)) { const [k, v] = pair.split(':'); const n = Number(v); if (!k || isNaN(n)) return toast(T('msgQty')); map[k.trim()] = n; } }
-      const product = { key: slug(A.f.pr_code || A.f.pr_en || A.f.pr_es), category: A.f.pr_cat || 'school', name: { es: A.f.pr_es || A.f.pr_en, en: A.f.pr_en || A.f.pr_es }, design: A.f.pr_design || '', personalization: A.f.pr_pers || 'none', base_price: price, price_map: map, ages: [child.length ? 'child' : '', adult.length ? 'adult' : ''].filter(Boolean), sizes: { child, adult }, colors, models: parseModels(A.f), photo: (A.f.pr_photo || '').trim(), enabled: existing ? existing.enabled : true, sort: existing ? existing.sort : 500 };
-      const r = await rpc('admin_save_product', { p_period: A.cfg, p_id: existing ? existing.id : null, p_product: product });
-      if (r.error) return; A.editProd = null; blankGarment(); await loadAll(); toast(T('msgSaved')); },
+      const check = buildProduct(existing, {});
+      if (check.err) { A.g.err = check.err; toast(check.err); return; }
+      A.g.err = '';
+      const uploaded = {};
+      const jobs = [];
+      if (A.g.photoFile) jobs.push(['main', A.g.photoFile]);
+      A.g.colors.forEach(c => { if (c.file) jobs.push([c.uid, c.file]); });
+      if (jobs.length) {
+        A.g.busy = true; render();
+        for (const [k, file] of jobs) { const url = await uploadGarmentPhoto(file); if (!url) { A.g.busy = false; toast(A.g.err); return render(); } uploaded[k] = url; }
+        A.g.busy = false;
+      }
+      const built = buildProduct(existing, uploaded);
+      if (built.err) { A.g.err = built.err; toast(built.err); return render(); }
+      const r = await rpc('admin_save_product', { p_period: A.cfg, p_id: existing ? existing.id : null, p_product: built.product });
+      if (r.error) return render();
+      A.editProd = null; blankGarment(); await loadAll(); toast(T('msgSaved')); },
     confirmPreorder: async el => { if (!window.confirm(T('confirmQuestion'))) return; const r = await rpc('admin_confirm_preorder', { p_order: el.dataset.id }); if (!r.error) { await loadAll(); toast(T('msgSaved')); } },
     openOrder: el => { A.orderSel = el.dataset.id; render(); }, closeOrder: () => { A.orderSel = null; render(); },
     saveLine: async el => { const l = D().lines.find(x => x.id === el.dataset.id), g = (k, d) => A.eq[l.id + ':' + k] !== undefined ? A.eq[l.id + ':' + k] : d;
@@ -702,6 +846,22 @@
     if (btn && acts[btn.dataset.act]) { e.preventDefault(); acts[btn.dataset.act](btn); }
   });
   root.addEventListener('change', e => { const t = e.target;
+    if (t.dataset.gphoto !== undefined || t.dataset.gcphoto) {
+      const file = t.files && t.files[0];
+      if (!file || !A.g || A.g.busy) return;
+      const bad = checkPhoto(file);
+      if (bad) { A.g.err = bad; toast(bad); return render(); }
+      A.g.err = '';
+      if (t.dataset.gcphoto) {
+        const c = A.g.colors.find(x => x.uid === t.dataset.gcphoto); if (!c) return;
+        if (c.preview) { try { URL.revokeObjectURL(c.preview); } catch (e2) {} }
+        c.file = file; c.preview = URL.createObjectURL(file);
+      } else {
+        if (A.g.photoPreview) { try { URL.revokeObjectURL(A.g.photoPreview); } catch (e2) {} }
+        A.g.photoFile = file; A.g.photoPreview = URL.createObjectURL(file);
+      }
+      return render();
+    }
     if (t.dataset.logo !== undefined) {
       const file = t.files && t.files[0];
       if (!file || A.logoBusy) return;
@@ -715,6 +875,7 @@
     set(t, true); });
   root.addEventListener('input', e => { if (e.target.tagName !== 'SELECT' && e.target.type !== 'checkbox') set(e.target, false); });
   function set(t, fire) {
+    if (t.dataset.gc) { const [uid, k] = t.dataset.gc.split(':'); const c = A.g && A.g.colors.find(x => x.uid === uid); if (c) c[k] = t.value; return; }
     if (t.dataset.m) { A[t.dataset.m][t.dataset.k] = t.value; return; }
     if (t.dataset.k) { A.f[t.dataset.k] = t.value; if (fire && t.dataset.re !== undefined) render(); return; }
     if (t.dataset.s) { A[t.dataset.s] = t.type === 'checkbox' ? t.checked : t.value; if (t.dataset.clr) A[t.dataset.clr] = 'all'; if (fire) render(); }
