@@ -2,7 +2,10 @@
 (function () {
   const { T, esc, money, loc, fd, szl, price, uuid } = JK;
   const root = document.getElementById('app');
-  let slug = new URLSearchParams(location.search).get('p') || '';
+  // Sin ?p= (como el iframe de jkinnovations.systeme.io/harder) siempre abre Harder.
+  // Así /harder no cambia aunque se creen escuelas nuevas; cada escuela nueva usa su propio ?p=.
+  const HARDER_SLUG = '73196439ad0bf8daa1';
+  let slug = new URLSearchParams(location.search).get('p') || HARDER_SLUG;
   const blank = () => ({ group: '', prod: '', model: '', age: '', color: '', size: '', qty: '1', text: '' });
   const S = { data: null, fatal: '', step: 1, f: { name: '', role: '', contact: '' }, o: blank(), draft: false, lines: [], errs: {}, ack: false, sending: false, done: null, reqKey: uuid(), added: '', zoom: '', submitErr: '' };
   // Retire this disposable test link without deleting its audit history.
